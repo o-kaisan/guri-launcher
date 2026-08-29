@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub App Delivery Setup"
+  short_description: "Configure renewable GitHub App credentials safely"
+  default_prompt: "Set up renewable GitHub App credentials and restricted Codex delivery for this repository."
