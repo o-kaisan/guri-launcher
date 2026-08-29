@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue 起点の開発ルール"
+  short_description: "リポジトリの開発ルールを一貫して適用します"
+  default_prompt: "リポジトリの開発フローに従って、この変更を計画、実装、試験、レビューしてください。"

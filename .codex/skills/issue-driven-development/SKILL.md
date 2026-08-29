@@ -1,9 +1,9 @@
 ---
-name: guri-development
-description: guri-launcher で変更を計画、実装、レビュー、文書化するときに、Issue 起点の開発、DDD の境界、単体試験、セキュリティ確認、TODO の規約、Pull Request の検証ルールを適用します。
+name: issue-driven-development
+description: リポジトリの変更を計画、実装、レビュー、文書化するときに、Issue 起点の開発、DDD の境界、単体試験、セキュリティ確認、TODO の規約、Pull Request の検証ルールを適用します。
 ---
 
-# Guri 開発ルール
+# Issue 起点の開発ルール
 
 ## ワークフロー
 
