@@ -32,3 +32,15 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Gradle and Android Studio
+.gradle/
+build/
+**/build/
+.idea/
+*.iml
+local.properties
+
+# Signing material
+*.jks
+*.keystore
