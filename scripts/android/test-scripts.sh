@@ -1,49 +1,96 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-tests=0
+readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-fail() { echo "not ok - $*" >&2; exit 1; }
-pass() { tests=$((tests + 1)); echo "ok $tests - $*"; }
+for script in "$REPOSITORY_ROOT"/.codex/environments/setup.sh "$REPOSITORY_ROOT"/scripts/android/*.sh; do
+  bash -n "$script"
+done
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/home/.android/avd"
-cat >"$tmp/bin/avdmanager" <<'EOF'
+required_setup_packages=(
+  'platform-tools'
+  'emulator'
+  'platforms;android-35'
+  'system-images;android-35;google_apis;x86_64'
+)
+for package in "${required_setup_packages[@]}"; do
+  grep -Fq -- "\"$package\"" "$REPOSITORY_ROOT/scripts/android/setup-sdk.sh"
+done
+
+grep -Fq 'commandlinetools-linux-${COMMAND_LINE_TOOLS_VERSION}_latest.zip' \
+  "$REPOSITORY_ROOT/scripts/android/setup-sdk.sh"
+
+grep -Fq 'list avd -c' "$REPOSITORY_ROOT/scripts/android/start-emulator.sh"
+grep -Fq 'grep -Fxq' "$REPOSITORY_ROOT/scripts/android/start-emulator.sh"
+grep -Fq 'sys.boot_completed' "$REPOSITORY_ROOT/scripts/android/start-emulator.sh"
+grep -Fq 'adb -e wait-for-device &' "$REPOSITORY_ROOT/scripts/android/start-emulator.sh"
+grep -Fq 'trap on_exit EXIT' "$REPOSITORY_ROOT/scripts/android/start-emulator.sh"
+grep -Fq "trap 'exit 130' INT TERM" "$REPOSITORY_ROOT/scripts/android/start-emulator.sh"
+
+test_acceleration_selection() {
+  local expected="$1" kvm_available="$2" accel_check_status="$3"
+  local test_root script output
+  test_root="$(mktemp -d)"
+  script="$test_root/start-emulator.sh"
+  trap 'rm -rf -- "$test_root"' RETURN
+
+  mkdir -p "$test_root/home/.android/avd/guri_api_35.avd" \
+    "$test_root/sdk/cmdline-tools/latest/bin" "$test_root/sdk/emulator" \
+    "$test_root/sdk/platform-tools"
+  : >"$test_root/home/.android/avd/guri_api_35.avd/config.ini"
+  if [[ "$kvm_available" == "yes" ]]; then
+    : >"$test_root/kvm"
+  fi
+  sed "s|/dev/kvm|$test_root/kvm|g" \
+    "$REPOSITORY_ROOT/scripts/android/start-emulator.sh" >"$script"
+
+  cat >"$test_root/sdk/cmdline-tools/latest/bin/avdmanager" <<'EOF'
 #!/usr/bin/env bash
-echo "$*" >>"$MOCK_LOG"
-mkdir -p "$ANDROID_AVD_HOME/${ANDROID_AVD_NAME}.avd"
-: >"$ANDROID_AVD_HOME/${ANDROID_AVD_NAME}.avd/config.ini"
+printf 'guri_api_35\n'
 EOF
-chmod +x "$tmp/bin/avdmanager"
-export PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/mock.log" HOME="$tmp/home"
-export ANDROID_AVD_HOME="$tmp/home/.android/avd" ANDROID_AVD_NAME=test_api_35
-export ANDROID_EMULATOR_DRY_RUN=1
-
-if ANDROID_EMULATOR_ACCELERATION=turbo "$SCRIPT_DIR/start-emulator.sh" >/dev/null 2>&1; then
-  fail "invalid acceleration was accepted"
+  cat >"$test_root/sdk/emulator/emulator" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-accel-check" ]]; then
+  exit "${FAKE_ACCEL_CHECK_STATUS:-1}"
 fi
-pass "acceleration mode is allow-list validated"
-
-if ANDROID_EMULATOR_ACCELERATION=auto ANDROID_KVM_DEVICE="$tmp/missing-kvm" "$SCRIPT_DIR/start-emulator.sh" >/dev/null 2>&1; then
-  fail "auto acceleration continued without KVM"
+printf '%s\n' "$@" >"$FAKE_EMULATOR_ARGS"
+sleep 5
+EOF
+  cat >"$test_root/sdk/platform-tools/adb" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"shell getprop sys.boot_completed"* ]]; then
+  printf '1\n'
 fi
-pass "auto mode rejects a host without KVM"
+exit 0
+EOF
+  chmod +x "$script" "$test_root/sdk/cmdline-tools/latest/bin/avdmanager" \
+    "$test_root/sdk/emulator/emulator" "$test_root/sdk/platform-tools/adb"
 
-touch "$tmp/kvm"
-auto_output="$(ANDROID_EMULATOR_ACCELERATION=auto ANDROID_KVM_DEVICE="$tmp/kvm" "$SCRIPT_DIR/start-emulator.sh")"
-[[ "$auto_output" == *"-accel on"* ]] || fail "auto mode did not select KVM acceleration"
-pass "auto mode selects acceleration when KVM is available"
+  output="$(HOME="$test_root/home" ANDROID_SDK_ROOT="$test_root/sdk" \
+    FAKE_ACCEL_CHECK_STATUS="$accel_check_status" \
+    FAKE_EMULATOR_ARGS="$test_root/emulator-args" "$script")"
+  grep -Fq "Android emulator acceleration: $expected (requested: auto)." <<<"$output"
+  grep -Fxq -- "$expected" < <(awk '$0 == "-accel" { getline; print; exit }' "$test_root/emulator-args")
+}
 
-off_output="$(ANDROID_EMULATOR_ACCELERATION=off ANDROID_KVM_DEVICE="$tmp/missing-kvm" "$SCRIPT_DIR/start-emulator.sh" 2>/dev/null)"
-[[ "$off_output" == *"-accel off"* ]] || fail "off mode did not select software emulation"
-pass "off mode explicitly selects software emulation"
+# Auto mode enables KVM only when both the device checks and emulator probe succeed.
+test_acceleration_selection on yes 0
+test_acceleration_selection off no 0
+test_acceleration_selection off yes 1
 
-before="$(wc -l <"$MOCK_LOG")"
-ANDROID_EMULATOR_ACCELERATION=off "$SCRIPT_DIR/start-emulator.sh" >/dev/null 2>&1
-after="$(wc -l <"$MOCK_LOG")"
-[[ "$before" == "$after" ]] || fail "existing AVD was recreated"
-pass "an existing AVD is not recreated"
+invalid_output="$(EMULATOR_ACCELERATION=turbo \
+  "$REPOSITORY_ROOT/scripts/android/start-emulator.sh" 2>&1 || printf 'status=%s\n' "$?")"
+grep -Fq 'EMULATOR_ACCELERATION must be one of: auto, on, off.' <<<"$invalid_output"
+grep -Fq 'status=2' <<<"$invalid_output"
 
-echo "1..$tests"
+invalid_avd_output="$(ANDROID_AVD_NAME='../shared' \
+  "$REPOSITORY_ROOT/scripts/android/start-emulator.sh" 2>&1 || printf 'status=%s\n' "$?")"
+grep -Fq 'ANDROID_AVD_NAME contains unsupported characters.' <<<"$invalid_avd_output"
+grep -Fq 'status=2' <<<"$invalid_avd_output"
+
+grep -Fq -- '-e "EMULATOR_ACCELERATION=$ACCELERATION"' \
+  "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
+grep -Fq -- '-e "ANDROID_AVD_NAME=guri_docker_api_35"' \
+  "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
+
+printf 'Android emulator script checks passed.\n'

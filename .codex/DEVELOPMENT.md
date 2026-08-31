@@ -125,9 +125,9 @@ PR は小さく、単一の目的に絞ります。レビュー指摘による�
 Android プロジェクト導入後は、PR 作成前に原則として次のコマンドを実行します。
 
 ```shell
-./gradlew test
-./gradlew lint
-./gradlew assembleDebug
+make test
+make lint
+make assemble-debug
 ```
 
 プロジェクト構成によりコマンドが利用できない場合は、その理由と代替確認を PR 本文に記載します。ローカル確認は CI の代替ではなく、CI はマージ前の最終ゲートです。いずれかの必須ジョブが失敗している PR は `main` へマージしません。

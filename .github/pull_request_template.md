@@ -7,9 +7,9 @@ Closes #
 ## 単体試験内容
 -
 ## 実行した確認コマンド
-- [ ] `./gradlew test`
-- [ ] `./gradlew lint`
-- [ ] `./gradlew assembleDebug`
+- [ ] `make test`
+- [ ] `make lint`
+- [ ] `make assemble-debug`
 ## UI 変更時のスクリーンショット / 動作確認
 ## セキュリティ確認
 - [ ] 秘密情報を追加していない

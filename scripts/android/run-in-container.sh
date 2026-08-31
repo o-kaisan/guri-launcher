@@ -25,7 +25,8 @@ fi
 
 docker run --detach --name "$CONTAINER" --init \
   "${device_args[@]}" \
-  -e "ANDROID_EMULATOR_ACCELERATION=$ACCELERATION" \
+  -e "EMULATOR_ACCELERATION=$ACCELERATION" \
+  -e "ANDROID_AVD_NAME=guri_docker_api_35" \
   -v "$REPOSITORY_ROOT:/workspace" \
   -v "$VOLUME:/root/.android/avd" \
   -w /workspace \
