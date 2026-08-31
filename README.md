@@ -4,7 +4,7 @@ Android 向けランチャーアプリの開発基盤です。現在は Kotlin �
 
 ## 必要な環境
 
-- JDK 17
+- JDK 25
 - Android Studio（または Android SDK。API 35）
 
 ## ローカルでの確認
