@@ -3,6 +3,23 @@ set -euo pipefail
 
 readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+required_make_targets=(
+  'test'
+  'lint'
+  'assemble-debug'
+  'check'
+  'android-sdk'
+  'android-emulator-start'
+  'android-emulator-install'
+  'android-emulator-devices'
+  'android-emulator-stop'
+  'android-emulator-test'
+)
+for target in "${required_make_targets[@]}"; do
+  grep -Eq "^${target}:" "$REPOSITORY_ROOT/Makefile"
+done
+make -s -C "$REPOSITORY_ROOT" help >/dev/null
+
 for script in "$REPOSITORY_ROOT"/.codex/environments/setup.sh "$REPOSITORY_ROOT"/scripts/android/*.sh; do
   bash -n "$script"
 done
