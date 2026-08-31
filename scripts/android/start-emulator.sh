@@ -5,11 +5,20 @@ readonly AVD_NAME="guri_api_35"
 readonly SYSTEM_IMAGE="system-images;android-35;google_apis;x86_64"
 readonly DEVICE_PROFILE="pixel_6"
 readonly BOOT_TIMEOUT_SECONDS="${BOOT_TIMEOUT_SECONDS:-300}"
+readonly EMULATOR_ACCELERATION="${EMULATOR_ACCELERATION:-auto}"
 
 if [[ ! "$BOOT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]]; then
   printf 'BOOT_TIMEOUT_SECONDS must be an integer from 1 through 9999.\n' >&2
   exit 2
 fi
+
+case "$EMULATOR_ACCELERATION" in
+  auto|on|off) ;;
+  *)
+    printf 'EMULATOR_ACCELERATION must be one of: auto, on, off.\n' >&2
+    exit 2
+    ;;
+esac
 
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 export ANDROID_SDK_ROOT
@@ -72,6 +81,17 @@ require_executable "$AVDMANAGER"
 require_executable "$EMULATOR"
 command -v adb >/dev/null || { printf 'adb is not available. Run setup-sdk.sh first.\n' >&2; exit 1; }
 
+acceleration_mode="$EMULATOR_ACCELERATION"
+if [[ "$acceleration_mode" == "auto" ]]; then
+  acceleration_mode="off"
+  if [[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] && "$EMULATOR" -accel-check >/dev/null 2>&1; then
+    acceleration_mode="on"
+  fi
+fi
+readonly acceleration_mode
+printf 'Android emulator acceleration: %s (requested: %s).\n' \
+  "$acceleration_mode" "$EMULATOR_ACCELERATION"
+
 # Match the complete AVD name so similarly named or existing AVDs are untouched.
 if ! "$AVDMANAGER" list avd -c | grep -Fxq -- "$AVD_NAME"; then
   printf 'no\n' | "$AVDMANAGER" create avd \
@@ -101,17 +121,18 @@ set_avd_property "hw.cpu.ncore" "2"
 set_avd_property "hw.gpu.enabled" "no"
 set_avd_property "hw.gpu.mode" "off"
 
-"$EMULATOR" \
-  -avd "$AVD_NAME" \
-  -no-window \
-  -no-audio \
-  -no-boot-anim \
-  -no-snapshot-load \
-  -no-snapshot-save \
-  -gpu off \
-  -feature -Vulkan \
-  -accel off \
-  >"$LOG_FILE" 2>&1 &
+emulator_args=(
+  -avd "$AVD_NAME"
+  -no-window
+  -no-audio
+  -no-boot-anim
+  -no-snapshot-load
+  -no-snapshot-save
+  -gpu off
+  -feature -Vulkan
+  -accel "$acceleration_mode"
+)
+"$EMULATOR" "${emulator_args[@]}" >"$LOG_FILE" 2>&1 &
 emulator_pid=$!
 printf '%s\n' "$emulator_pid" >"$PID_FILE"
 

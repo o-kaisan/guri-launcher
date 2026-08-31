@@ -37,7 +37,7 @@ AVD の作成と headless 起動は次のコマンドで行います。
 make android-emulator-start
 ```
 
-`guri_api_35` が存在しない場合だけ Pixel 6 プロファイルと API 35 Google APIs x86_64 image で作成します。既存 AVD は再作成しません。RAM 2 GiB、2 CPU、GPU off（Vulkan も無効）、`-no-window -no-audio -no-boot-anim`、snapshot 無効を明示し、KVM がない環境でも動くよう `-accel off` で起動します。ソフトウェアエミュレーションは非常に遅く、CPU によっては実用的な時間内に起動を完了できません。既定では起動完了を最大 300 秒待ち、必要な場合は 1 から 9999 までの整数秒を `BOOT_TIMEOUT_SECONDS` に設定できます。実機相当の継続的な検証には KVM 対応 worker を推奨します。
+`guri_api_35` が存在しない場合だけ Pixel 6 プロファイルと API 35 Google APIs x86_64 image で作成します。既存 AVD は再作成しません。RAM 2 GiB、2 CPU、GPU off（Vulkan も無効）、`-no-window -no-audio -no-boot-anim`、snapshot 無効を明示します。既定の `EMULATOR_ACCELERATION=auto` では `/dev/kvm` の存在と読み書き権限、および `emulator -accel-check` の成功を確認し、KVM が利用できれば `-accel on`、それ以外は `-accel off` で起動します。選択結果は起動時に表示されます。必要に応じて `EMULATOR_ACCELERATION=on` または `off` で明示指定でき、それ以外の値は拒否されます。ソフトウェアエミュレーションは非常に遅く、CPU によっては実用的な時間内に起動を完了できません。既定では起動完了を最大 300 秒待ち、必要な場合は 1 から 9999 までの整数秒を `BOOT_TIMEOUT_SECONDS` に設定できます。実機相当の継続的な検証には KVM 対応 worker を推奨します。
 
 Test Android Apps プラグインからは、起動後に通常どおり `adb -e` を使えます。debug APK の build、置換 install、`MainActivity` 起動はまとめて確認できます。
 
