@@ -5,6 +5,7 @@
 ## 基本方針
 
 - すべての実装は GitHub Issue を起点とし、目的と受入条件を実装前に明確にします。
+- 調査、診断、ビルド、テストでは [`skills/token-efficient-development/SKILL.md`](skills/token-efficient-development/SKILL.md) を適用し、正確性を保ちながら長大ログと重複実行を抑えます。
 - 設計では DDD（Domain-Driven Design）の考え方に従い、対象ドメイン、責務、依存関係を整理します。
 - 実装と同時に単体試験を追加し、変更した振る舞いを検証します。
 - 秘密情報、権限、入力値、外部依存、ログ出力などのセキュリティリスクを確認します。
