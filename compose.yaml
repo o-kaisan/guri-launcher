@@ -1,0 +1,52 @@
+name: guri-launcher
+
+x-android-emulator: &android-emulator
+  build:
+    context: .
+    dockerfile: docker/android-emulator/Dockerfile
+  image: ${ANDROID_EMULATOR_IMAGE:-guri-launcher-android-emulator:api37}
+  container_name: ${ANDROID_EMULATOR_CONTAINER:-guri-launcher-android-emulator}
+  init: true
+  working_dir: /workspace
+  volumes:
+    - .:/workspace
+    - android-avd:/root/.android/avd
+    - android-gradle-cache:/root/.gradle
+    - android-build-home:/root/.android-build
+  command:
+    - bash
+    - -lc
+    - ./scripts/android/start-gui-emulator.sh
+  ports:
+    - "127.0.0.1:${ANDROID_EMULATOR_GUI_PORT:-6080}:6080"
+  healthcheck:
+    test: ["CMD-SHELL", "test \"$$(adb -e shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')\" = 1 && adb -e shell service check package 2>/dev/null | grep -Fq 'found' && adb -e shell service check activity 2>/dev/null | grep -Fq 'found' && curl --fail --silent http://127.0.0.1:6080/ >/dev/null"]
+    interval: 5s
+    timeout: 5s
+    retries: 60
+    start_period: 10s
+  stop_grace_period: 30s
+
+services:
+  android-emulator:
+    <<: *android-emulator
+    environment:
+      ANDROID_AVD_NAME: guri_docker_api_37
+      EMULATOR_ACCELERATION: auto
+    devices:
+      - /dev/kvm:/dev/kvm
+
+  android-emulator-software:
+    <<: *android-emulator
+    profiles: [software]
+    environment:
+      ANDROID_AVD_NAME: guri_docker_api_37
+      EMULATOR_ACCELERATION: off
+
+volumes:
+  android-avd:
+    name: ${ANDROID_AVD_VOLUME:-guri-launcher-android-avd}
+  android-gradle-cache:
+    name: ${ANDROID_GRADLE_CACHE_VOLUME:-guri-launcher-android-gradle-cache}
+  android-build-home:
+    name: ${ANDROID_BUILD_HOME_VOLUME:-guri-launcher-android-build-home}

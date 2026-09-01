@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly AVD_NAME="guri_api_35"
+readonly AVD_NAME="guri_api_37"
 readonly PID_FILE="${TMPDIR:-/tmp}/${AVD_NAME}.pid"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 export PATH="$ANDROID_SDK_ROOT/platform-tools:$PATH"
