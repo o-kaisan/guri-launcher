@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly AVD_NAME="guri_api_35"
-readonly SYSTEM_IMAGE="system-images;android-35;google_apis;x86_64"
+readonly AVD_NAME="${ANDROID_AVD_NAME:-guri_api_37}"
+readonly SYSTEM_IMAGE="system-images;android-37.0;google_apis;x86_64"
 readonly DEVICE_PROFILE="pixel_6"
 readonly BOOT_TIMEOUT_SECONDS="${BOOT_TIMEOUT_SECONDS:-300}"
 readonly EMULATOR_ACCELERATION="${EMULATOR_ACCELERATION:-auto}"
+readonly EMULATOR_WINDOW_MODE="${EMULATOR_WINDOW_MODE:-headless}"
+readonly SYSTEM_LAUNCHER_PACKAGE="com.google.android.apps.nexuslauncher"
 
 if [[ ! "$BOOT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]]; then
   printf 'BOOT_TIMEOUT_SECONDS must be an integer from 1 through 9999.\n' >&2
+  exit 2
+fi
+
+if [[ ! "$AVD_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  printf 'ANDROID_AVD_NAME contains unsupported characters.\n' >&2
   exit 2
 fi
 
@@ -16,6 +23,14 @@ case "$EMULATOR_ACCELERATION" in
   auto|on|off) ;;
   *)
     printf 'EMULATOR_ACCELERATION must be one of: auto, on, off.\n' >&2
+    exit 2
+    ;;
+esac
+
+case "$EMULATOR_WINDOW_MODE" in
+  headless|window) ;;
+  *)
+    printf 'EMULATOR_WINDOW_MODE must be one of: headless, window.\n' >&2
     exit 2
     ;;
 esac
@@ -100,11 +115,15 @@ if ! "$AVDMANAGER" list avd -c | grep -Fxq -- "$AVD_NAME"; then
     --device "$DEVICE_PROFILE"
 fi
 
-readonly AVD_CONFIG="$HOME/.android/avd/${AVD_NAME}.avd/config.ini"
+readonly AVD_DIRECTORY="$HOME/.android/avd/${AVD_NAME}.avd"
+readonly AVD_CONFIG="$AVD_DIRECTORY/config.ini"
 if [[ ! -f "$AVD_CONFIG" ]]; then
   printf 'AVD configuration was not created: %s\n' "$AVD_CONFIG" >&2
   exit 1
 fi
+
+# A forcibly stopped container can leave these generated locks behind.
+rm -f -- "$AVD_DIRECTORY/multiinstance.lock" "$AVD_DIRECTORY/hardware-qemu.ini.lock"
 
 set_avd_property() {
   local key="$1" value="$2"
@@ -115,23 +134,32 @@ set_avd_property() {
   fi
 }
 
-# Explicit software-compatible hardware profile for unaccelerated cloud workers.
+# Explicit resource limits suitable for local containers and cloud workers.
 set_avd_property "hw.ramSize" "2048"
 set_avd_property "hw.cpu.ncore" "2"
-set_avd_property "hw.gpu.enabled" "no"
-set_avd_property "hw.gpu.mode" "off"
+
+if [[ "$EMULATOR_WINDOW_MODE" == "window" ]]; then
+  set_avd_property "hw.gpu.enabled" "yes"
+  set_avd_property "hw.gpu.mode" "host"
+else
+  set_avd_property "hw.gpu.enabled" "no"
+  set_avd_property "hw.gpu.mode" "off"
+fi
 
 emulator_args=(
   -avd "$AVD_NAME"
-  -no-window
   -no-audio
   -no-boot-anim
   -no-snapshot-load
   -no-snapshot-save
-  -gpu off
   -feature -Vulkan
   -accel "$acceleration_mode"
 )
+if [[ "$EMULATOR_WINDOW_MODE" == "window" ]]; then
+  emulator_args+=(-gpu host)
+else
+  emulator_args+=(-no-window -gpu off)
+fi
 "$EMULATOR" "${emulator_args[@]}" >"$LOG_FILE" 2>&1 &
 emulator_pid=$!
 printf '%s\n' "$emulator_pid" >"$PID_FILE"
@@ -165,7 +193,20 @@ while [[ "$(adb -e shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" !
   sleep 2
 done
 
+# Android 17 r6 currently crashes SurfaceFlinger while Nexus Launcher performs
+# wallpaper region sampling in a container renderer. This AVD launches the app
+# directly, so disable only the system launcher before it registers that listener.
+while ! adb -e shell service check package 2>/dev/null | grep -Fq 'found'; do
+  if (( SECONDS >= deadline )); then
+    printf 'Timed out waiting for Android Package Manager.\n' >&2
+    exit 1
+  fi
+  sleep 1
+done
+adb -e shell pm disable-user --user 0 "$SYSTEM_LAUNCHER_PACKAGE" >/dev/null
+adb -e shell am force-stop "$SYSTEM_LAUNCHER_PACKAGE"
+
 trap - EXIT INT TERM
-printf 'AVD %s booted (ABI x86_64, device %s, RAM 2048 MiB, GPU off).\n' \
-  "$AVD_NAME" "$DEVICE_PROFILE"
+printf 'AVD %s booted (ABI x86_64, device %s, RAM 2048 MiB, window %s).\n' \
+  "$AVD_NAME" "$DEVICE_PROFILE" "$EMULATOR_WINDOW_MODE"
 adb devices -l

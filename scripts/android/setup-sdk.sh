@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly COMMAND_LINE_TOOLS_VERSION="11076708"
-readonly SYSTEM_IMAGE="system-images;android-35;google_apis;x86_64"
+readonly SYSTEM_IMAGE="system-images;android-37.0;google_apis;x86_64"
 
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 export ANDROID_SDK_ROOT
@@ -40,10 +40,11 @@ if (( license_status != 0 )); then
   exit "$license_status"
 fi
 
-"$SDKMANAGER" \
+"$SDKMANAGER" --channel=3 \
   "platform-tools" \
   "emulator" \
   "platforms;android-35" \
+  "build-tools;36.0.0" \
   "$SYSTEM_IMAGE"
 
-printf 'Android SDK API 35 emulator dependencies are installed in %s.\n' "$ANDROID_SDK_ROOT"
+printf 'Android 17 (API 37.0) emulator dependencies are installed in %s.\n' "$ANDROID_SDK_ROOT"
