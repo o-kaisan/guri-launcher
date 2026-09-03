@@ -35,6 +35,9 @@ jobs:
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
 
+      - name: Test release scripts
+        run: make release-test
+
       - name: Run unit tests
         run: make test
 

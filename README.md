@@ -19,7 +19,50 @@ make assemble-debug
 
 3 つの確認と Android emulator script のテストをまとめて実行する場合は `make check` を使います。利用可能なコマンドは `make help` で確認できます。
 
-Debug APK は `app/build/outputs/apk/debug/app-debug.apk` に生成されます。Pull Request と `main` への push では同じ確認を CI で実行します。`vX.Y.Z` タグでは、バージョンを含む名前の APK と自動生成したリリースノートを GitHub Release へ公開します。
+Debug APK は `app/build/outputs/apk/debug/app-debug.apk` に生成されます。Pull Request と `main` への push では同じ確認を CI で実行します。
+
+## スマートフォンへ配布するAPK
+
+`vX.Y.Z` タグをpushすると、同じリリース鍵で署名されたAPKと自動生成したRelease NotesをGitHub Releaseへ公開します。Assetsのファイル名は `guri-launcher-vX.Y.Z.apk` です。スマートフォンで[Releases](https://github.com/o-kaisan/guri-launcher/releases)を開き、APKを直接ダウンロードしてインストールできます。初回だけ、ダウンロードに使用したブラウザーまたはファイル管理アプリに「不明なアプリのインストール」の許可が必要です。
+
+同じ署名鍵と、タグから生成されるより大きな `versionCode` を使うため、以前のAPKを削除せず上書き更新できます。`v1.2.3` は `versionName=1.2.3`、`versionCode=1002003` になります。タグは先頭ゼロのない `vX.Y.Z` 形式とし、minorとpatchはそれぞれ999以下にします。古いバージョンへ戻す場合は通常の上書きインストールができません。
+
+開発用のDebug APKがすでに入っている端末では署名が異なるため、最初のRelease APKを入れる前に一度だけDebug APKをアンインストールします。それ以降のRelease APKは上書き更新できます。
+
+### 初回だけ行う署名設定
+
+JDKの `keytool` と、ログイン済みのGitHub CLI `gh` があるPCで次を実行します。
+
+```shell
+make release-signing-setup
+```
+
+16文字以上のパスワードを入力すると、既定では `~/.config/guri-launcher/release.keystore` にリリース鍵を作成し、次のGitHub Actions Secretsを登録します。パスワードは画面やログへ出力しません。
+
+- `ANDROID_RELEASE_KEYSTORE_BASE64`
+- `ANDROID_RELEASE_KEYSTORE_PASSWORD`
+- `ANDROID_RELEASE_KEY_ALIAS`
+- `ANDROID_RELEASE_KEY_PASSWORD`
+
+リリース鍵とパスワードを失うと、インストール済みアプリを上書き更新できません。リポジトリには追加せず、両方を安全な別の場所にもバックアップしてください。Secrets登録だけをやり直す場合は、同じ保存先とパスワードでもう一度コマンドを実行します。保存先を変更する場合は、リポジトリ外のパスを指定します。
+
+```shell
+GURI_RELEASE_KEYSTORE_PATH=/安全な保存先/release.keystore \
+  make release-signing-setup
+```
+
+### リリースする
+
+署名設定後、`main` のリリース対象コミットへタグを付けてpushします。
+
+```shell
+git switch main
+git pull --ff-only
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+Release WorkflowはTest、Lint、署名付きRelease APKのビルド、署名検証を行います。すべて成功した場合だけGitHub Releaseを作成します。署名情報が不足している場合やタグが不正な場合は、APKを公開せず失敗します。同じタグのReleaseは上書きしないため、公開後のAPKも置き換えません。
 
 ## Android 17 emulator での確認
 
