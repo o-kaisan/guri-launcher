@@ -266,23 +266,52 @@ git commit -m "feat: add launchable app catalog and launcher"
 
 ```kotlin
 @JvmInline
-value class RelativeCoordinate(val permille: Int)
+value class RelativeCoordinate(val permille: Int) {
+    init { require(permille in 0..1000) }
+}
 
 data class GridAnchor(
     val horizontal: RelativeCoordinate,
     val vertical: RelativeCoordinate,
 )
 
-data class GridViewport(val widthDp: Float, val heightDp: Float)
+data class GridViewport(val widthDp: Float, val heightDp: Float) {
+    init { require(widthDp > 0f && heightDp > 0f) }
+}
+
 data class ResponsiveGridMetrics(val columns: Int, val rows: Int) {
+    init { require(columns > 0 && rows > 0) }
     val capacity: Int get() = columns * rows
 }
+
 data class ResolvedGridPosition(val row: Int, val column: Int)
 data class HomePlacement(val appId: LaunchableAppId, val anchor: GridAnchor)
+data class HomePageLayout(
+    val pageId: HomePageId,
+    val placements: List<HomePlacement>,
+)
+data class HomeLayout(
+    val pages: List<HomePageLayout>,
+    val currentPageId: HomePageId,
+)
 data class ResolvedGrid(
     val placements: Map<ResolvedGridPosition, HomePlacement>,
     val overflow: List<HomePlacement>,
 )
+
+interface HomeLayoutRepository {
+    fun observeLayout(): Flow<HomeLayout>
+    suspend fun updateLayout(transform: (HomeLayout) -> HomeLayout)
+}
+
+class AssignAppToGrid {
+    suspend operator fun invoke(
+        pageId: HomePageId,
+        position: ResolvedGridPosition,
+        metrics: ResponsiveGridMetrics,
+        appId: LaunchableAppId,
+    ): LayoutUpdateResult
+}
 
 class ResponsiveGridCalculator {
     fun calculate(viewport: GridViewport): ResponsiveGridMetrics
@@ -324,14 +353,21 @@ Expected: FAIL because the responsive grid types do not exist.
 - [ ] **Step 3: Implement the exact calculator.**
 
 ```kotlin
+@JvmInline
+value class RelativeCoordinate(val permille: Int) {
+    init { require(permille in 0..1000) }
+}
+
+data class GridViewport(val widthDp: Float, val heightDp: Float) {
+    init { require(widthDp > 0f && heightDp > 0f) }
+}
+
 class ResponsiveGridCalculator {
-    fun calculate(viewport: GridViewport): ResponsiveGridMetrics {
-        require(viewport.widthDp > 0f && viewport.heightDp > 0f)
-        return ResponsiveGridMetrics(
+    fun calculate(viewport: GridViewport): ResponsiveGridMetrics =
+        ResponsiveGridMetrics(
             columns = floor(viewport.widthDp / 88f).toInt().coerceIn(1, 6),
             rows = floor(viewport.heightDp / 104f).toInt().coerceIn(1, 7),
         )
-    }
 }
 ```
 
@@ -345,17 +381,35 @@ Expected: PASS.
 
 ```kotlin
 @Test fun `top right anchor stays top right when dimensions change`() {
-    val placement = HomePlacement(APP_ID, GridAnchor(relative(1000), relative(0)))
+    val placement = HomePlacement(
+        APP_ID,
+        GridAnchor(RelativeCoordinate(1000), RelativeCoordinate(0)),
+    )
     val compact = resolver.resolve(ResponsiveGridMetrics(4, 5), listOf(placement))
     val expanded = resolver.resolve(ResponsiveGridMetrics(6, 7), listOf(placement))
-    assertEquals(ResolvedGridPosition(0, 3), compact.positionOf(APP_ID))
-    assertEquals(ResolvedGridPosition(0, 5), expanded.positionOf(APP_ID))
+    assertEquals(
+        ResolvedGridPosition(0, 3),
+        compact.placements.entries.single { it.value.appId == APP_ID }.key,
+    )
+    assertEquals(
+        ResolvedGridPosition(0, 5),
+        expanded.placements.entries.single { it.value.appId == APP_ID }.key,
+    )
 }
 
 @Test fun `overflow is stable and never hidden`() {
     val result = resolver.resolve(
         ResponsiveGridMetrics(columns = 1, rows = 1),
-        listOf(topLeft(APP_A), bottomRight(APP_B)),
+        listOf(
+            HomePlacement(
+                APP_A,
+                GridAnchor(RelativeCoordinate(0), RelativeCoordinate(0)),
+            ),
+            HomePlacement(
+                APP_B,
+                GridAnchor(RelativeCoordinate(1000), RelativeCoordinate(1000)),
+            ),
+        ),
     )
     assertEquals(setOf(APP_A), result.placements.values.map { it.appId }.toSet())
     assertEquals(listOf(APP_B), result.overflow.map { it.appId })
@@ -368,7 +422,60 @@ Run: `./gradlew :app:testDebugUnitTest --tests '*ResponsiveGridResolverTest'`
 
 Expected: FAIL because `resolve` is not implemented.
 
-- [ ] **Step 7: Implement deterministic resolution.** Sort placements by vertical permille, horizontal permille, and `appId.stableKey`. For each placement, choose the empty cell with minimum squared normalized-center distance; break equal distance by row then column. Return unassigned placements as `overflow` in the same stable order.
+- [ ] **Step 7: Implement deterministic resolution.** Use the following core algorithm; keep the returned map insertion-ordered.
+
+```kotlin
+fun resolve(
+    metrics: ResponsiveGridMetrics,
+    placements: List<HomePlacement>,
+): ResolvedGrid {
+    val free = buildList {
+        repeat(metrics.rows) { row ->
+            repeat(metrics.columns) { column ->
+                add(ResolvedGridPosition(row, column))
+            }
+        }
+    }.toMutableSet()
+    val resolved = linkedMapOf<ResolvedGridPosition, HomePlacement>()
+    val overflow = mutableListOf<HomePlacement>()
+    val ordered = placements.sortedWith(
+        compareBy<HomePlacement>(
+            { it.anchor.vertical.permille },
+            { it.anchor.horizontal.permille },
+            { it.appId.stableKey },
+        ),
+    )
+
+    for (placement in ordered) {
+        val cell = free.minWithOrNull(
+            compareBy<ResolvedGridPosition>(
+                { squaredDistance(placement.anchor, it, metrics) },
+                { it.row },
+                { it.column },
+            ),
+        )
+        if (cell == null) {
+            overflow += placement
+        } else {
+            free -= cell
+            resolved[cell] = placement
+        }
+    }
+    return ResolvedGrid(resolved, overflow)
+}
+
+private fun squaredDistance(
+    anchor: GridAnchor,
+    cell: ResolvedGridPosition,
+    metrics: ResponsiveGridMetrics,
+): Float {
+    val cellX = ((cell.column + 0.5f) / metrics.columns) * 1000f
+    val cellY = ((cell.row + 0.5f) / metrics.rows) * 1000f
+    val dx = anchor.horizontal.permille - cellX
+    val dy = anchor.vertical.permille - cellY
+    return dx * dx + dy * dy
+}
+```
 
 - [ ] **Step 8: Run resolver and layout invariant tests.**
 
@@ -376,7 +483,20 @@ Run: `./gradlew :app:testDebugUnitTest --tests '*ResponsiveGridResolverTest' --t
 
 Expected: PASS for relative remapping, collision tie-break, duplicate app/anchor rejection, and stable overflow.
 
-- [ ] **Step 9: Implement persistence and assignment.** Store `horizontalPermille` and `verticalPermille` in schema 1. `AssignAppToGrid` receives the selected cell plus current metrics, converts the cell center with `round((index + 0.5) / count * 1000)`, moves an existing app ID, and atomically saves its new anchor.
+- [ ] **Step 9: Implement persistence and assignment.** Store `horizontalPermille` and `verticalPermille` in schema 1. Convert the selected cell using this exact function, move an existing app ID within the page, reject a duplicate anchor, and atomically save.
+
+```kotlin
+private fun ResolvedGridPosition.toAnchor(
+    metrics: ResponsiveGridMetrics,
+): GridAnchor = GridAnchor(
+    horizontal = RelativeCoordinate(
+        (((column + 0.5f) / metrics.columns) * 1000f).roundToInt(),
+    ),
+    vertical = RelativeCoordinate(
+        (((row + 0.5f) / metrics.rows) * 1000f).roundToInt(),
+    ),
+)
+```
 
 - [ ] **Step 10: Add responsive `AppGrid` and editor UI.** Measure only the viewport remaining after safe drawing insets and the Guri reserved region. Render `metrics.columns × metrics.rows`, distribute remaining width/height evenly, expose occupied and empty-cell semantics, and render unavailable placements without changing their anchor.
 
@@ -699,18 +819,82 @@ class ReflowHomeLayoutForGrid(
 
 ```kotlin
 @Test fun `shrink carries overflow to following pages without hiding apps`() = runTest {
-    repository.save(layout(page(APP_A, APP_B), page(APP_C)))
-    ReflowHomeLayoutForGrid(repository, resolver, ids)(ResponsiveGridMetrics(1, 1))
+    val firstId = HomePageId("first")
+    val secondId = HomePageId("second")
+    repository.save(
+        HomeLayout(
+            pages = listOf(
+                HomePageLayout(
+                    firstId,
+                    listOf(
+                        HomePlacement(
+                            APP_A,
+                            GridAnchor(RelativeCoordinate(0), RelativeCoordinate(0)),
+                        ),
+                        HomePlacement(
+                            APP_B,
+                            GridAnchor(RelativeCoordinate(1000), RelativeCoordinate(1000)),
+                        ),
+                    ),
+                ),
+                HomePageLayout(
+                    secondId,
+                    listOf(
+                        HomePlacement(
+                            APP_C,
+                            GridAnchor(RelativeCoordinate(0), RelativeCoordinate(0)),
+                        ),
+                    ),
+                ),
+            ),
+            currentPageId = firstId,
+        ),
+    )
+
+    ReflowHomeLayoutForGrid(repository, resolver, ids)(
+        ResponsiveGridMetrics(columns = 1, rows = 1),
+    )
+
     assertEquals(
         listOf(listOf(APP_A), listOf(APP_C), listOf(APP_B)),
-        repository.current().pages.map { page -> page.placements.map { it.appId } },
+        repository.current().pages.map { page ->
+            page.placements.map { placement -> placement.appId }
+        },
     )
 }
 
 @Test fun `expansion does not pull apps back to earlier page`() = runTest {
-    val split = layout(page(APP_A), page(APP_B))
+    val firstId = HomePageId("first")
+    val secondId = HomePageId("second")
+    val split = HomeLayout(
+        pages = listOf(
+            HomePageLayout(
+                firstId,
+                listOf(
+                    HomePlacement(
+                        APP_A,
+                        GridAnchor(RelativeCoordinate(0), RelativeCoordinate(0)),
+                    ),
+                ),
+            ),
+            HomePageLayout(
+                secondId,
+                listOf(
+                    HomePlacement(
+                        APP_B,
+                        GridAnchor(RelativeCoordinate(1000), RelativeCoordinate(1000)),
+                    ),
+                ),
+            ),
+        ),
+        currentPageId = firstId,
+    )
     repository.save(split)
-    ReflowHomeLayoutForGrid(repository, resolver, ids)(ResponsiveGridMetrics(6, 7))
+
+    ReflowHomeLayoutForGrid(repository, resolver, ids)(
+        ResponsiveGridMetrics(columns = 6, rows = 7),
+    )
+
     assertEquals(split, repository.current())
 }
 ```
@@ -721,7 +905,34 @@ Run: `./gradlew :app:testDebugUnitTest --tests '*ManageHomePagesTest' --tests '*
 
 Expected: FAIL because `ReflowHomeLayoutForGrid` does not exist.
 
-- [ ] **Step 4: Implement forward-only atomic reflow.** Resolve each existing page independently. Keep resolved placements on that page; prepend no content from later pages; append its stable overflow to the next page; cascade overflow; create pages until the carry is empty. Never delete an empty existing page or pull placements backward when capacity grows.
+- [ ] **Step 4: Implement forward-only atomic reflow.** Apply one repository transaction using this structure.
+
+```kotlin
+repository.updateLayout { layout ->
+    val pages = layout.pages.toMutableList()
+    var index = 0
+    while (index < pages.size) {
+        val resolved = resolver.resolve(metrics, pages[index].placements)
+        pages[index] = pages[index].copy(
+            placements = resolved.placements.entries
+                .sortedWith(compareBy({ it.key.row }, { it.key.column }))
+                .map { it.value },
+        )
+        if (resolved.overflow.isNotEmpty()) {
+            if (index + 1 == pages.size) {
+                pages += HomePageLayout(idFactory.create(), emptyList())
+            }
+            pages[index + 1] = pages[index + 1].copy(
+                placements = pages[index + 1].placements + resolved.overflow,
+            )
+        }
+        index += 1
+    }
+    layout.copy(pages = pages)
+}
+```
+
+Never delete an existing page or move a later page's placements backward when capacity grows.
 
 - [ ] **Step 5: Run page and reflow tests.**
 
