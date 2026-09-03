@@ -27,7 +27,7 @@ guri-launcher を Android のホームアプリとして動作させ、次の2�
 
 - デフォルト HOME アプリ候補として登録する。
 - 現在のユーザープロファイルにある起動可能アプリを取得して起動する。
-- アプリを固定グリッドへ割り当て、複数ホームページとして保存する。
+- アプリを端末の safe area に合わせて行列数が変わるレスポンシブグリッドへ相対位置で割り当て、複数ホームページとして保存する。
 - 中央ぐりぐりボタンによる長押しと2Dフォーカス移動を実装する。
 - 左右を選べる非表示ポケットと、1〜4個のアプリ割り当てを実装する。
 - ポケットから指を離さずアプリを展開、選択、起動する。
@@ -57,6 +57,8 @@ guri-launcher を Android のホームアプリとして動作させ、次の2�
 | Guri control | 画面下部に表示する2D操作開始ボタン |
 | Pocket | 待機中は何も表示せず、画面下コーナーの透明領域から開始するクイック起動操作 |
 | Current page | ジェスチャー開始時点で表示中のホームページ |
+| Grid anchor | 画面内の相対位置を横・縦それぞれ0〜1000の整数で表した永続座標 |
+| Resolved grid | 現在のsafe areaから算出した行列数と、Grid anchorを実セルへ割り当てた表示結果 |
 | Focus | 指を離した場合に起動対象となるアプリ |
 | Continuous gesture | PointerDown から PointerUp まで同じ指を維持する操作 |
 | Gesture tuning | 長押し時間、デッドゾーン、移動ステップ、ポケット展開距離をまとめた設定 |
@@ -65,7 +67,7 @@ guri-launcher を Android のホームアプリとして動作させ、次の2�
 
 | Layer | Responsibility |
 |---|---|
-| domain | アプリ識別子、固定配置、ポケット設定、感度、方向選択、2つのステートマシン |
+| domain | アプリ識別子、相対配置、レスポンシブグリッド解決、ポケット設定、感度、方向選択、2つのステートマシン |
 | application | アプリ一覧取得、配置更新、ページ選択、設定更新、アプリ起動のユースケース |
 | infrastructure | LauncherApps、DataStore、WindowManager、Android の触覚・起動結果変換 |
 | presentation | Compose 画面、ViewModel、pointer event の変換、フォーカスと扇表示 |
@@ -89,11 +91,26 @@ LaunchableApp は次を持つ。
 
 自分自身の MainActivity は一覧から除外する。
 
-### 6.2 Home layout
+### 6.2 Responsive home layout
 
-HomePageId は安定した文字列 ID とする。GridPosition は row と column の非負整数からなる。同一ページの同一位置には最大1アプリだけを割り当てる。
+HomePageId は安定した文字列 ID とする。永続配置には端末固有の row と column を保存せず、GridAnchor を保存する。GridAnchor は horizontalPermille と verticalPermille の2整数を持ち、どちらも0〜1000の範囲とする。左上は (0, 0)、右下は (1000, 1000) である。
 
-HomePageLayout は pageId と Map<GridPosition, LaunchableAppId> を持つ。空きマスは Map に含めない。配置編集では同じアプリを同一ページへ重複配置しない。
+HomePlacement は LaunchableAppId と GridAnchor を持つ。HomePageLayout は pageId と順序付き HomePlacement 一覧を持ち、同じアプリを同一ページへ重複配置しない。同じ GridAnchor への直接配置も拒否する。利用不可アプリも配置と anchor を保持し、解決済みグリッド上でセルを占有する。
+
+ResponsiveGridCalculator は AppGrid が実際に使える safe viewport の widthDp と heightDp から次の式で表示行列を算出する。
+
+- target cell width: 88dp
+- target cell height: 104dp
+- columns: max(1, min(6, floor(widthDp / 88dp)))
+- rows: max(1, min(7, floor(heightDp / 104dp)))
+- capacity: columns × rows
+- 実セルの幅と高さ: viewport の余りを含め、各軸を columns と rows で均等分割する
+
+viewport は status/navigation/cutout/hinge の inset と Guri control 用下部領域を除いた矩形である。Pocket は overlay のため viewport の行列計算には含めない。
+
+配置編集でセルを選んだときは、そのセル中心を0〜1000へ正規化して GridAnchor として保存する。表示時は HomePlacement を verticalPermille、horizontalPermille、LaunchableAppId の順に処理し、各 anchor から正規化セル中心までの二乗距離が最小の空きセルへ割り当てる。同距離は row、column の順で決める。この解決結果を ResolvedGridPosition(row, column) とする。
+
+配置数が capacity を超えた場合、解決できなかった HomePlacement を同じ安定順序の overflow として返す。Application は縮小時の overflow を後続ページへ順に移し、必要ならページを作成して atomic に保存する。アプリを非表示にしない。画面が再び拡大しても前ページへ自動で戻さず、ユーザーが確定した新しいページ配置を維持する。
 
 HomeLayout は順序付きページ一覧と currentPageId を持つ。初回起動時は空のページを1つ作成する。ページは1つ以上を維持する。
 
@@ -153,11 +170,13 @@ Application が次の interface を定義する。
 ### HomeLayoutRepository
 
 - observeLayout(): HomeLayout の stream
-- assignApp(pageId, position, appId)
-- removeAssignment(pageId, position)
+- assignApp(pageId, anchor, appId)
+- removeAssignment(pageId, appId)
 - addPage()
 - removePage(pageId)
 - selectPage(pageId)
+
+ResponsiveGridCalculator と ResponsiveGridResolver は Domain の pure function とする。ReflowHomeLayoutForGrid は Application use case とし、ResolvedGrid の overflow を後続ページへ atomic に移す。
 
 ### PocketConfigurationRepository
 
@@ -203,19 +222,19 @@ Active 状態の drag delta を x と y の accumulator へ加算する。絶対
 
 ### 8.4 First focus
 
-最初の方向イベントは、ぐりぐりボタン中心を論理グリッドの直下に投影した anchor から検索する。
+最初の方向イベントは、ぐりぐりボタン中心を現在の Resolved grid の直下に投影した gesture anchor から検索する。永続 GridAnchor ではなく、gesture 開始時に解決済みのセル中心を使用する。
 
-候補は指定方向の半平面にあり、現在ページに割り当て済みかつ利用可能なアプリだけとする。候補を次の順で比較する。
+候補は指定方向の半平面にあり、gesture 開始時の現在ページに割り当て済みかつ利用可能なアプリだけとする。候補を次の順で比較する。
 
 1. 方向軸に対する角度のずれが小さい
-2. anchor からの距離が短い
-3. row、column、LaunchableAppId の辞書順
+2. gesture anchor からの距離が短い
+3. ResolvedGridPosition の row、column、LaunchableAppId の辞書順
 
 候補がない場合は ActiveWithoutFocus を維持する。
 
 ### 8.5 Subsequent focus movement
 
-現在の GridPosition を基準に同じ directional search を行う。空きマスと利用不可アプリは候補に含めない。候補がない場合は現在の Focus を維持する。
+現在の ResolvedGridPosition を基準に同じ directional search を行う。空きマスと利用不可アプリは候補に含めない。候補がない場合は現在の Focus を維持する。window change によって Resolved grid が変わる場合は、再解決前に gesture をキャンセルする。
 
 ### 8.6 Release and cancellation
 
@@ -315,7 +334,7 @@ MainActivity は GuriLauncherApp と依存関係の起点だけを担当する�
 
 - HomeScreen: page、grid、overlay の構成
 - HomePager: currentPageId と横 swipe
-- AppGrid: 固定 row、column の描画と直接 tap 起動
+- AppGrid: safe viewport に応じた行列計算、相対 anchor のセル解決、直接 tap 起動
 - GuriControl: 表示、長押し、2D pointer input
 - PocketGestureRegion: 非表示 trigger と pointer input
 - PocketFanOverlay: icon、focus、disabled placeholder
@@ -337,8 +356,11 @@ GuriControl と PocketGestureRegion は HomePager の外側に overlay として
 - Guri と Pocket が同じ side でも、Guri は half 中央、Pocket は corner のため hit region を重ねない。
 - hinge が画面を分離する場合は hinge bounds を half の境界として使用する。
 - hinge がない expanded window は safe width の中央を境界とする。
-- AppGrid の row と column は COMPACT と EXPANDED で維持し、cell size と spacing だけを safe bounds に合わせる。
-- configuration change 後も HomeLayout、currentPageId、設定を復元する。
+- AppGrid は COMPACT/EXPANDEDそれぞれのsafe viewportから rows と columns を再計算する。端末固有の固定行列数を持たない。
+- 保存済み GridAnchor を新しい行列の最も近い空きセルへ決定的に解決し、画面内の相対位置を維持する。
+- window、posture、safe viewport が変わる場合は、進行中の gesture を先にキャンセルしてからグリッドを再解決する。
+- 縮小後の capacity に収まらない配置は後続ページへ atomic に送り、必要ならページを追加する。拡大時に前ページへ自動回収しない。
+- configuration change 後も GridAnchor、HomeLayout、currentPageId、設定を復元する。
 
 ## 13. Error Handling
 
@@ -350,7 +372,7 @@ GuriControl と PocketGestureRegion は HomePager の外側に overlay として
 | DataStore corruption | 初期値へ復旧し、一度だけ通知 |
 | PointerCancel or second pointer | 起動せず Idle |
 | Activity background | 起動せず Idle |
-| Window or posture change | 起動せず Idle |
+| Window or posture change | 起動せず Idle。新しいsafe viewportでグリッドを再解決し、overflowを後続ページへ保存 |
 | Page change while active | 起動せず Idle |
 | No candidate in direction | 現在の focus を維持。初回なら未選択を維持 |
 | Pocket assignment unavailable | disabled placeholder。選択と起動を禁止 |
@@ -409,7 +431,10 @@ Settings and layout:
 - pocket capacity の1と4を受理し、0と5を拒否する。
 - assignment 数不一致と重複を拒否する。
 - page は1つ以上を維持する。
-- 同一 grid position の重複を拒否する。
+- GridAnchor は0と1000を受理し、範囲外を拒否する。
+- 同一ページの同一appと同一GridAnchorへの重複配置を拒否する。
+- 88dp/104dp境界、columns上限6、rows上限7を検証する。
+- 相対anchorの最近傍セル解決、collision tie-break、overflow順を検証する。
 - preset から exact tuning values への mapping を検証する。
 
 ### 16.2 Application tests
@@ -422,6 +447,8 @@ Fake AppCatalog、AppLauncher、Repository、WindowModeProvider を使用する�
 - configuration 保存と再読込を検証する。
 - package refresh 後も unavailable assignment を保持する。
 - window mode change で active gesture を cancel する。
+- grid縮小時にoverflowを後続ページへ送り、必要ならページを追加する。
+- grid拡大時に後続ページの配置を前ページへ自動で戻さない。
 
 ### 16.3 Compose UI tests
 
@@ -434,6 +461,7 @@ performTouchInput と test clock を使用する。
 - selected release で launch callback が1回
 - unselected release、cancel、multi-touch で callback が0回
 - HomePager の page change と overlay 固定
+- 複数のsafe viewportで行列数、相対位置、overflow後のページを検証
 - COMPACT 下部中央と EXPANDED 左右配置
 - TalkBack semantics と custom action
 
@@ -442,7 +470,7 @@ performTouchInput と test clock を使用する。
 - guri-launcher を default HOME として選択する。
 - 実在する test app を grid と Pocket へ割り当てて起動する。
 - gesture navigation と3-button navigation の両方で Pocket が system gesture を妨げない。
-- resizable emulator の COMPACT と EXPANDED を切り替える。
+- resizable emulator の複数画面サイズ、COMPACT、EXPANDEDを切り替え、行列数と相対位置を確認する。
 - foldable emulator の posture 変更中に active gesture が cancel される。
 - app uninstall 後に unavailable 表示となり、別アプリへ置換されない。
 - Activity recreation 後に layout と settings が復元される。
@@ -453,7 +481,7 @@ performTouchInput と test clock を使用する。
 |---:|---|---|
 | 1 | Default HOME app registration | Epic #16 |
 | 2 | Launchable app catalog and launch adapter | Epic #16 |
-| 3 | Fixed grid and app assignment editor | 2 |
+| 3 | Responsive grid and relative-position app assignment editor | 2 |
 | 4 | 2D focus state machine | 3 |
 | 5 | Guri control continuous gesture integration | 2, 3, 4 |
 | 6 | Pocket side, capacity, ordering, and assignment settings | 2 |
@@ -469,7 +497,7 @@ Each child Issue must describe its independently testable deliverable, Domain/Ap
 ## 18. Acceptance Criteria
 
 - Android system can select guri-launcher as HOME.
-- User can assign launchable apps to fixed grid positions and persist them.
+- User can assign launchable apps by relative screen position; rows and columns adapt to the safe viewport and persist across recreation.
 - User can long-press Guri, slide in 2D, release, and launch the focused app.
 - Guri begins without an initial focus.
 - Only apps on the page current at gesture start are candidates.
@@ -480,6 +508,7 @@ Each child Issue must describe its independently testable deliverable, Domain/Ap
 - Folded or compact layout places Guri at bottom center.
 - Expanded layout places Guri at the selected half bottom center.
 - Pocket remains at the configured screen corner across pages.
+- Grid shrink never hides an assigned app: overflow moves to subsequent pages, while later expansion does not silently pull it back.
 - System HOME and BACK gestures remain usable.
 - All cancel conditions produce no app launch.
 - Removed apps remain assigned as unavailable and are never silently replaced.
