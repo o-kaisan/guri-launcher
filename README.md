@@ -51,6 +51,12 @@ GURI_RELEASE_KEYSTORE_PATH=/安全な保存先/release.keystore \
   make release-signing-setup
 ```
 
+GitHub側に署名Secretsがあるのに指定した鍵が見つからない場合、別鍵による誤上書きを防ぐため処理は停止します。まず元の鍵をバックアップから復元してください。既存端末を更新できなくなることを承知して意図的に鍵を作り直す場合だけ、次を実行して確認欄に `ROTATE RELEASE KEY` と入力します。
+
+```shell
+GURI_ALLOW_RELEASE_KEY_ROTATION=true make release-signing-setup
+```
+
 ### リリースする
 
 署名設定後、`main` のリリース対象コミットへタグを付けてpushします。
@@ -62,7 +68,7 @@ git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
 
-Release WorkflowはTest、Lint、署名付きRelease APKのビルド、署名検証を行います。すべて成功した場合だけGitHub Releaseを作成します。署名情報が不足している場合やタグが不正な場合は、APKを公開せず失敗します。同じタグのReleaseは上書きしないため、公開後のAPKも置き換えません。
+Release WorkflowはTest、Lint、署名付きRelease APKのビルド、署名検証を行います。すべて成功した場合だけGitHub Releaseを作成します。署名情報が不足している場合、タグが不正な場合、または処理中にタグの参照先が変わった場合は、APKを公開せず失敗します。同じタグのReleaseは上書きしないため、公開後のAPKも置き換えません。
 
 ## Android 17 emulator での確認
 

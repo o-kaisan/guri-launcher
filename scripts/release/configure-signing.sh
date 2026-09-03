@@ -3,26 +3,88 @@ set -euo pipefail
 set +x
 umask 077
 
-readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly GITHUB_REPOSITORY="${GURI_GITHUB_REPOSITORY:-o-kaisan/guri-launcher}"
 readonly KEY_ALIAS="guri-launcher"
+readonly ALLOW_KEY_ROTATION="${GURI_ALLOW_RELEASE_KEY_ROTATION:-false}"
 readonly CONFIG_DIRECTORY="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}/guri-launcher"
 readonly KEYSTORE_PATH_INPUT="${GURI_RELEASE_KEYSTORE_PATH:-$CONFIG_DIRECTORY/release.keystore}"
+readonly -a SIGNING_SECRET_NAMES=(
+  ANDROID_RELEASE_KEYSTORE_BASE64
+  ANDROID_RELEASE_KEYSTORE_PASSWORD
+  ANDROID_RELEASE_KEY_ALIAS
+  ANDROID_RELEASE_KEY_PASSWORD
+)
 
-for command_name in keytool gh base64 tr realpath; do
+case "$ALLOW_KEY_ROTATION" in
+  true | false) ;;
+  *)
+    echo "error: GURI_ALLOW_RELEASE_KEY_ROTATION must be 'true' or 'false'." >&2
+    exit 2
+    ;;
+esac
+
+for command_name in keytool gh base64 tr; do
   command -v "$command_name" >/dev/null 2>&1 \
     || { echo "error: required command not found: $command_name" >&2; exit 1; }
 done
 
-readonly KEYSTORE_PATH="$(realpath -m -- "$KEYSTORE_PATH_INPUT")"
+case "$KEYSTORE_PATH_INPUT" in
+  /*) readonly KEYSTORE_PATH_OPERAND="$KEYSTORE_PATH_INPUT" ;;
+  *) readonly KEYSTORE_PATH_OPERAND="./$KEYSTORE_PATH_INPUT" ;;
+esac
+readonly KEYSTORE_DIRECTORY_INPUT="$(dirname "$KEYSTORE_PATH_OPERAND")"
+readonly KEYSTORE_FILENAME="$(basename "$KEYSTORE_PATH_OPERAND")"
+if [[ "$KEYSTORE_FILENAME" == "." || "$KEYSTORE_FILENAME" == ".." ]]; then
+  echo "error: the release keystore path must include a file name." >&2
+  exit 2
+fi
+mkdir -p "$KEYSTORE_DIRECTORY_INPUT"
+if ! resolved_keystore_directory="$(cd "$KEYSTORE_DIRECTORY_INPUT" && pwd -P)"; then
+  echo "error: could not resolve the release keystore directory." >&2
+  exit 2
+fi
+readonly KEYSTORE_PATH="$resolved_keystore_directory/$KEYSTORE_FILENAME"
 case "$KEYSTORE_PATH" in
   "$REPOSITORY_ROOT" | "$REPOSITORY_ROOT"/*)
     echo "error: the release keystore must be stored outside the repository." >&2
     exit 2
     ;;
 esac
+if [[ -L "$KEYSTORE_PATH" ]]; then
+  echo "error: the release keystore path must not be a symbolic link." >&2
+  exit 2
+fi
 
-mkdir -p "$(dirname "$KEYSTORE_PATH")"
+if [[ ! -e "$KEYSTORE_PATH" ]]; then
+  existing_secret_names="$(
+    gh secret list --repo "$GITHUB_REPOSITORY" --json name --jq '.[].name'
+  )"
+  signing_secrets_exist=false
+  for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
+    while IFS= read -r existing_secret_name; do
+      if [[ "$existing_secret_name" == "$signing_secret_name" ]]; then
+        signing_secrets_exist=true
+        break 2
+      fi
+    done <<<"$existing_secret_names"
+  done
+
+  if [[ "$signing_secrets_exist" == true ]]; then
+    if [[ "$ALLOW_KEY_ROTATION" != true ]]; then
+      echo "error: signing secrets already exist, but the local release keystore is missing." >&2
+      echo "Restore the original keystore or explicitly authorize an incompatible key rotation." >&2
+      exit 2
+    fi
+    echo "warning: rotating the release key prevents updates to every existing installation." >&2
+    printf 'Type ROTATE RELEASE KEY to continue: ' >&2
+    if ! IFS= read -r rotation_confirmation \
+      || [[ "$rotation_confirmation" != "ROTATE RELEASE KEY" ]]; then
+      echo "error: release-key rotation was not confirmed." >&2
+      exit 2
+    fi
+  fi
+fi
 
 printf 'Release-key password: ' >&2
 IFS= read -r -s key_password

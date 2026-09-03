@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       apk_name: ${{ steps.metadata.outputs.apk_name }}
+      commit_sha: ${{ steps.release_commit.outputs.commit_sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -42,6 +43,7 @@ jobs:
         run: make release-test
 
       - name: Verify tag commit is on the default branch
+        id: release_commit
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -50,6 +52,7 @@ jobs:
             echo "error: release tags must point to a commit on $DEFAULT_BRANCH." >&2
             exit 1
           fi
+          printf 'commit_sha=%s\n' "$tag_commit" >>"$GITHUB_OUTPUT"
 
       - name: Derive release metadata
         id: metadata
@@ -148,11 +151,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.commit_sha }}
+
       - name: Download signed APK
         uses: actions/download-artifact@v4
         with:
           name: release-apk
           path: dist
+
+      - name: Verify release tag has not moved
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT_SHA: ${{ needs.build.outputs.commit_sha }}
+        run: >-
+          ./scripts/release/verify-release-tag.sh
+          "$GITHUB_REF_NAME" "$EXPECTED_COMMIT_SHA"
 
       - name: Create GitHub Release
         env:

@@ -20,12 +20,33 @@ cat >"$TEST_ROOT/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ "${1:-}" == "secret" && "${2:-}" == "set" && "$#" -eq 5 ]] || exit 64
-readonly secret_name="$3"
-[[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 65
-cat >"$FAKE_SECRET_DIRECTORY/$secret_name"
+case "${1:-} ${2:-}" in
+  "secret list")
+    [[ "$#" -eq 8 ]] || exit 64
+    [[ "$3" == "--repo" && "$4" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 65
+    [[ "$5" == "--json" && "$6" == "name" ]] || exit 66
+    [[ "$7" == "--jq" && "$8" == ".[].name" ]] || exit 67
+    find "$FAKE_SECRET_DIRECTORY" -maxdepth 1 -type f -exec basename {} \; | sort
+    ;;
+  "secret set")
+    [[ "$#" -eq 5 ]] || exit 64
+    readonly secret_name="$3"
+    [[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 65
+    cat >"$FAKE_SECRET_DIRECTORY/$secret_name"
+    ;;
+  *)
+    exit 68
+    ;;
+esac
 EOF
 chmod +x "$TEST_ROOT/bin/gh"
+
+cat >"$TEST_ROOT/bin/realpath" <<'EOF'
+#!/usr/bin/env bash
+echo "GNU realpath must not be required" >&2
+exit 99
+EOF
+chmod +x "$TEST_ROOT/bin/realpath"
 
 readonly KEYSTORE_PATH="$TEST_ROOT/config/release.keystore"
 readonly PASSWORD='correct horse battery staple'
@@ -65,6 +86,90 @@ cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/uploaded.keystore" \
 [[ "$output" != *"$PASSWORD"* ]] || fail "password was written to output"
 [[ "$output" == *"Back up the keystore"* ]] \
   || fail "successful setup did not explain that the keystore needs a backup"
+
+# Missing local key material must not silently replace already-configured secrets.
+mkdir -p "$TEST_ROOT/rotation-guard-secrets" "$TEST_ROOT/rotation-guard-config"
+cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/rotation-guard-secrets/"
+readonly GUARDED_SECRET_DIGEST="$(
+  sha256sum "$TEST_ROOT/rotation-guard-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+    | awk '{print $1}'
+)"
+set +e
+rotation_guard_output="$(
+  printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/rotation-guard-secrets" \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$TEST_ROOT/rotation-guard-config/release.keystore" \
+      "$SCRIPT" 2>&1
+)"
+rotation_guard_status=$?
+set -e
+
+[[ "$rotation_guard_status" -eq 2 ]] \
+  || fail "missing local key replaced existing signing secrets"
+[[ "$rotation_guard_output" == *"signing secrets already exist"* ]] \
+  || fail "missing local key did not explain the existing signing-secret conflict"
+[[ ! -e "$TEST_ROOT/rotation-guard-config/release.keystore" ]] \
+  || fail "missing local key generated a replacement without confirmation"
+[[ "$(
+  sha256sum "$TEST_ROOT/rotation-guard-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+    | awk '{print $1}'
+)" == "$GUARDED_SECRET_DIGEST" ]] \
+  || fail "missing local key overwrote the configured keystore secret"
+
+# Rotation needs both the explicit opt-in and an exact interactive confirmation.
+mkdir -p "$TEST_ROOT/rotation-abort-secrets" "$TEST_ROOT/rotation-abort-config"
+cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/rotation-abort-secrets/"
+set +e
+rotation_abort_output="$(
+  printf '%s\n' 'DO NOT ROTATE' \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/rotation-abort-secrets" \
+      GURI_ALLOW_RELEASE_KEY_ROTATION=true \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$TEST_ROOT/rotation-abort-config/release.keystore" \
+      "$SCRIPT" 2>&1
+)"
+rotation_abort_status=$?
+set -e
+
+[[ "$rotation_abort_status" -eq 2 ]] \
+  || fail "unconfirmed release-key rotation returned status $rotation_abort_status"
+[[ "$rotation_abort_output" == *"rotation was not confirmed"* ]] \
+  || fail "unconfirmed release-key rotation did not explain why it stopped"
+[[ ! -e "$TEST_ROOT/rotation-abort-config/release.keystore" ]] \
+  || fail "unconfirmed release-key rotation generated a keystore"
+
+mkdir -p "$TEST_ROOT/rotation-confirm-secrets" "$TEST_ROOT/rotation-confirm-config"
+cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/rotation-confirm-secrets/"
+set +e
+rotation_confirm_output="$(
+  printf '%s\n%s\n%s\n' 'ROTATE RELEASE KEY' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/rotation-confirm-secrets" \
+      GURI_ALLOW_RELEASE_KEY_ROTATION=true \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$TEST_ROOT/rotation-confirm-config/release.keystore" \
+      "$SCRIPT" 2>&1
+)"
+rotation_confirm_status=$?
+set -e
+
+[[ "$rotation_confirm_status" -eq 0 ]] \
+  || fail "confirmed release-key rotation failed: $rotation_confirm_output"
+[[ -f "$TEST_ROOT/rotation-confirm-config/release.keystore" ]] \
+  || fail "confirmed release-key rotation did not generate a keystore"
+base64 --decode "$TEST_ROOT/rotation-confirm-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  >"$TEST_ROOT/rotated-upload.keystore"
+cmp -s "$TEST_ROOT/rotation-confirm-config/release.keystore" \
+  "$TEST_ROOT/rotated-upload.keystore" \
+  || fail "confirmed release-key rotation did not upload the new keystore"
+[[ "$rotation_confirm_output" == *"prevents updates to every existing installation"* ]] \
+  || fail "confirmed release-key rotation did not print the compatibility warning"
 
 # A mistyped confirmation must not create or upload signing material.
 mkdir -p "$TEST_ROOT/mismatch-secrets" "$TEST_ROOT/mismatch-config"
