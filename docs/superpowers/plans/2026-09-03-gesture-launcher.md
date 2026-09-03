@@ -1,23 +1,25 @@
 # Gesture Launcher MVP Implementation Plan
 
-> **For Codex:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` when executing this plan in the current session, or `superpowers:executing-plans` when executing it in a separate session. Keep every checkbox current and stop at each review checkpoint.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** guri-launcher を Android の HOME アプリとして動作させ、中央のぐりぐり操作と左右どちらかの非表示 Pocket 操作から、固定配置したアプリを1回だけ安全に起動できるようにする。
+**Goal:** guri-launcher を Android の HOME アプリとして動作させ、画面サイズへ適応する相対配置グリッド、中央のぐりぐり操作、左右どちらかの非表示 Pocket 操作からアプリを1回だけ安全に起動できるようにする。
 
-**Architecture:** Android 型を含まない Domain の2つの純粋な状態機械を中心に置く。Application がアプリ一覧・起動・配置・設定・ウィンドウ状態のポートとユースケースを定義し、Infrastructure が `LauncherApps`、JSON DataStore、WindowManager で実装する。Presentation は Compose の pointer event を Domain event へ変換し、状態と一回限りの起動 effect を ViewModel 経由で描画・実行する。
+**Architecture:** Android 型を含まない Domain に、相対 GridAnchor、safe viewportから行列数を算出する pure calculator、anchorを実セルへ割り当てる resolver、2つのgesture state machineを置く。Application がアプリ一覧・起動・配置・overflow reflow・設定・window状態のport/use caseを定義し、Infrastructureが `LauncherApps`、JSON DataStore、WindowManagerで実装する。PresentationはComposeのviewport/pointer eventをDomain inputへ変換し、解決済みセルと一回限りの起動effectを描画・実行する。
 
 **Tech Stack:** Kotlin 2.4.10、Android Gradle Plugin 9.3.2、Jetpack Compose（既存 BOM 2025.01.01）、Lifecycle 2.11.0、DataStore 1.2.1、WindowManager 1.5.1、kotlinx.coroutines 1.10.2、kotlinx.serialization JSON 1.11.0、JUnit 4.13.2、AndroidX Test Runner 1.7.0、AndroidX Test ext.junit 1.3.0、Espresso 3.7.0。
 
 **Spec:** [`docs/superpowers/specs/2026-09-03-gesture-launcher-design.md`](../specs/2026-09-03-gesture-launcher-design.md)
 
-**Global Constraints:**
+## Global Constraints
 
 - [ ] 1 Issue = 1 PR とし、各PRの本文に `Closes #<issue>` を記載する。
 - [ ] Domain と Application の production code から `android.*`、`androidx.*`、Compose、DataStore、`LauncherApps` を参照しない。
 - [ ] 現在のユーザープロファイルだけを対象にし、自アプリを一覧から除外する。
 - [ ] `QUERY_ALL_PACKAGES`、利用履歴、起動回数、アプリ選択ログを追加しない。
 - [ ] PointerCancel、2本目の pointer、background、page change、window change では起動しない。
-- [ ] 削除・無効化された割り当ては識別子と位置を保持し、自動置換しない。
+- [ ] 削除・無効化された割り当ては識別子と相対位置を保持し、自動置換しない。
+- [ ] GridAnchorは各軸0〜1000、target cellは88dp×104dp、columns上限6、rows上限7とする。
+- [ ] window変更時はgestureを先にcancelし、overflowは後続pageへ送る。拡大時に前pageへ自動回収しない。
 - [ ] 各PRで `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug` を実行し、UI変更PRでは `./gradlew :app:connectedDebugAndroidTest` も実行する。
 - [ ] 実装中に未完箇所を残す場合はリポジトリ規約の `TODO(#Issue): ...` 形式だけを使う。
 
@@ -27,7 +29,7 @@
 |---|---|---|
 | A | 1. Default HOME registration | Epic |
 | A | 2. App catalog and launcher | Epic |
-| B | 3. Fixed grid and assignment editor | 2 |
+| B | 3. Responsive grid and relative-position assignment editor | 2 |
 | B | 6. Pocket configuration | 2 |
 | C | 4. Guri focus state machine | 3 |
 | C | 7. Pocket fan state machine | 6 |
@@ -53,12 +55,12 @@ Wave 内の項目は独立しているため並行実装できる。次の Wave 
 ### New production packages
 
 - `domain/app`: `LaunchableAppId`、`LaunchableApp`、`LaunchResult`。
-- `domain/layout`: `GridPosition`、`HomePageId`、`HomePageLayout`、`HomeLayout`。
+- `domain/layout`: `GridAnchor`、`GridViewport`、`ResponsiveGridMetrics`、`ResolvedGridPosition`、`ResponsiveGridCalculator`、`ResponsiveGridResolver`、`HomePlacement`、`HomePageId`、`HomePageLayout`、`HomeLayout`。
 - `domain/gesture`: 座標、感度、共通出力、方向 resolver、Guri state machine。
 - `domain/pocket`: Pocket 設定、fan geometry、Pocket state machine。
 - `domain/window`: Window mode、Guri side、safe bounds。
 - `application/app`: app catalog、launcher port、一覧監視、起動 use case。
-- `application/layout`: layout repository と配置・page use case。
+- `application/layout`: layout repository、相対配置、overflow reflow、page use case。
 - `application/pocket`: Pocket repository と更新 use case。
 - `application/settings`: launcher settings repository と更新 use case。
 - `application/window`: window snapshot provider。
@@ -231,13 +233,19 @@ git add gradle/libs.versions.toml app/build.gradle.kts app/src
 git commit -m "feat: add launchable app catalog and launcher"
 ```
 
-## Task 3: Persist a Fixed Grid and Add Assignment Editing
+## Task 3: Persist a Responsive Grid and Add Assignment Editing
 
-**Backlog:** `[MVP] 固定グリッドとアプリ配置編集を実装する`
+**Backlog:** `[MVP] レスポンシブグリッドとアプリ配置編集を実装する`
 
 **Files:**
 
-- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/GridPosition.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/GridAnchor.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/GridViewport.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/ResponsiveGridMetrics.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/ResolvedGridPosition.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/ResponsiveGridCalculator.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/ResponsiveGridResolver.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/HomePlacement.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/HomePageId.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/HomePageLayout.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/domain/layout/HomeLayout.kt`
@@ -249,42 +257,142 @@ git commit -m "feat: add launchable app catalog and launcher"
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/presentation/settings/AppPickerScreen.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/presentation/settings/LauncherSettingsScreen.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/presentation/settings/SettingsViewModel.kt`
-- Tests: matching `domain/layout`, `application/layout`, and `infrastructure/storage` test files.
+- Test: matching `domain/layout`, `application/layout`, `infrastructure/storage`, and Compose test files.
 
-**Consumes:** `AppCatalog.observeApps()` and the shared `LauncherStateStore` from Task 2.
+**Interfaces:**
 
-**Produces:** `HomeLayoutRepository.observeLayout()` and atomic `updateLayout(transform)`; a fixed 4-column × 5-row MVP grid whose `(row, column)` identity does not change across window modes.
-
-- [ ] **Step 1: Write failing Domain invariant tests.** Cover negative coordinates, duplicate app on one page, one app per position, non-empty pages, and an existing `currentPageId`.
+- Consumes: `AppCatalog.observeApps(): Flow<List<LaunchableApp>>` and Task 2's application-scoped `LauncherStateStore`.
+- Produces:
 
 ```kotlin
-@Test fun `assigning an app already on the page moves it`() {
-    val page = pageWith(APP_ID at GridPosition(0, 0))
-    val moved = page.assign(APP_ID, GridPosition(1, 2))
-    assertNull(moved.assignments[GridPosition(0, 0)])
-    assertEquals(APP_ID, moved.assignments[GridPosition(1, 2)])
+@JvmInline
+value class RelativeCoordinate(val permille: Int)
+
+data class GridAnchor(
+    val horizontal: RelativeCoordinate,
+    val vertical: RelativeCoordinate,
+)
+
+data class GridViewport(val widthDp: Float, val heightDp: Float)
+data class ResponsiveGridMetrics(val columns: Int, val rows: Int) {
+    val capacity: Int get() = columns * rows
+}
+data class ResolvedGridPosition(val row: Int, val column: Int)
+data class HomePlacement(val appId: LaunchableAppId, val anchor: GridAnchor)
+data class ResolvedGrid(
+    val placements: Map<ResolvedGridPosition, HomePlacement>,
+    val overflow: List<HomePlacement>,
+)
+
+class ResponsiveGridCalculator {
+    fun calculate(viewport: GridViewport): ResponsiveGridMetrics
+}
+
+class ResponsiveGridResolver {
+    fun resolve(
+        metrics: ResponsiveGridMetrics,
+        placements: List<HomePlacement>,
+    ): ResolvedGrid
 }
 ```
 
-- [ ] **Step 2: Run layout tests and confirm failure.**
+- [ ] **Step 1: Write failing coordinate and sizing tests.**
 
-Run: `./gradlew :app:testDebugUnitTest --tests '*layout*'`
+```kotlin
+@Test fun `responsive boundaries are exact`() {
+    val calculator = ResponsiveGridCalculator()
+    assertEquals(3, calculator.calculate(GridViewport(351f, 519f)).columns)
+    assertEquals(4, calculator.calculate(GridViewport(352f, 519f)).columns)
+    assertEquals(4, calculator.calculate(GridViewport(352f, 519f)).rows)
+    assertEquals(5, calculator.calculate(GridViewport(352f, 520f)).rows)
+    assertEquals(6, calculator.calculate(GridViewport(2_000f, 2_000f)).columns)
+    assertEquals(7, calculator.calculate(GridViewport(2_000f, 2_000f)).rows)
+}
 
-- [ ] **Step 3: Implement immutable layout values.** `HomePageLayout.assign` moves duplicate app IDs and replaces an occupied cell explicitly; `HomeLayout` always contains at least one page.
-- [ ] **Step 4: Write failing repository mapping tests.** Verify default `schemaVersion = 1`, one empty page, stable round trip, and corrupted JSON fallback to the default state.
-- [ ] **Step 5: Implement `DataStoreHomeLayoutRepository` over Task 2's single application-scoped `LauncherStateStore`.** Map immutable DTOs to Domain values and use atomic `updateData`; never expose DTOs outside Infrastructure.
-- [ ] **Step 6: Write and implement `AssignAppToGrid`.** Reject positions outside rows `0..4` and columns `0..3` with `LayoutUpdateResult.InvalidPosition`; persist valid moves atomically.
-- [ ] **Step 7: Add `AppGrid`, `AppPickerScreen`, and placement controls.** Every occupied cell shows icon, label, direct-tap launch, and an edit action. Empty cells expose an “アプリを配置” semantics action.
-- [ ] **Step 8: Add tests for unavailable assignments.** Catalog removal changes rendering to a disabled placeholder without mutating stored `LaunchableAppId`.
-- [ ] **Step 9: Run unit and connected UI tests.**
+@Test(expected = IllegalArgumentException::class)
+fun `relative coordinate rejects 1001`() {
+    RelativeCoordinate(1001)
+}
+```
+
+- [ ] **Step 2: Run the sizing tests and confirm missing types fail.**
+
+Run: `./gradlew :app:testDebugUnitTest --tests '*ResponsiveGridCalculatorTest' --tests '*GridAnchorTest'`
+
+Expected: FAIL because the responsive grid types do not exist.
+
+- [ ] **Step 3: Implement the exact calculator.**
+
+```kotlin
+class ResponsiveGridCalculator {
+    fun calculate(viewport: GridViewport): ResponsiveGridMetrics {
+        require(viewport.widthDp > 0f && viewport.heightDp > 0f)
+        return ResponsiveGridMetrics(
+            columns = floor(viewport.widthDp / 88f).toInt().coerceIn(1, 6),
+            rows = floor(viewport.heightDp / 104f).toInt().coerceIn(1, 7),
+        )
+    }
+}
+```
+
+- [ ] **Step 4: Run the focused tests and confirm they pass.**
+
+Run: `./gradlew :app:testDebugUnitTest --tests '*ResponsiveGridCalculatorTest' --tests '*GridAnchorTest'`
+
+Expected: PASS.
+
+- [ ] **Step 5: Write failing relative-position, collision, and overflow tests.**
+
+```kotlin
+@Test fun `top right anchor stays top right when dimensions change`() {
+    val placement = HomePlacement(APP_ID, GridAnchor(relative(1000), relative(0)))
+    val compact = resolver.resolve(ResponsiveGridMetrics(4, 5), listOf(placement))
+    val expanded = resolver.resolve(ResponsiveGridMetrics(6, 7), listOf(placement))
+    assertEquals(ResolvedGridPosition(0, 3), compact.positionOf(APP_ID))
+    assertEquals(ResolvedGridPosition(0, 5), expanded.positionOf(APP_ID))
+}
+
+@Test fun `overflow is stable and never hidden`() {
+    val result = resolver.resolve(
+        ResponsiveGridMetrics(columns = 1, rows = 1),
+        listOf(topLeft(APP_A), bottomRight(APP_B)),
+    )
+    assertEquals(setOf(APP_A), result.placements.values.map { it.appId }.toSet())
+    assertEquals(listOf(APP_B), result.overflow.map { it.appId })
+}
+```
+
+- [ ] **Step 6: Run the resolver tests and confirm missing behavior fails.**
+
+Run: `./gradlew :app:testDebugUnitTest --tests '*ResponsiveGridResolverTest'`
+
+Expected: FAIL because `resolve` is not implemented.
+
+- [ ] **Step 7: Implement deterministic resolution.** Sort placements by vertical permille, horizontal permille, and `appId.stableKey`. For each placement, choose the empty cell with minimum squared normalized-center distance; break equal distance by row then column. Return unassigned placements as `overflow` in the same stable order.
+
+- [ ] **Step 8: Run resolver and layout invariant tests.**
+
+Run: `./gradlew :app:testDebugUnitTest --tests '*ResponsiveGridResolverTest' --tests '*HomePageLayoutTest'`
+
+Expected: PASS for relative remapping, collision tie-break, duplicate app/anchor rejection, and stable overflow.
+
+- [ ] **Step 9: Implement persistence and assignment.** Store `horizontalPermille` and `verticalPermille` in schema 1. `AssignAppToGrid` receives the selected cell plus current metrics, converts the cell center with `round((index + 0.5) / count * 1000)`, moves an existing app ID, and atomically saves its new anchor.
+
+- [ ] **Step 10: Add responsive `AppGrid` and editor UI.** Measure only the viewport remaining after safe drawing insets and the Guri reserved region. Render `metrics.columns × metrics.rows`, distribute remaining width/height evenly, expose occupied and empty-cell semantics, and render unavailable placements without changing their anchor.
+
+- [ ] **Step 11: Add Compose tests for at least 320×568dp, 360×800dp, and 673×841dp viewports.** Assert calculated dimensions, top-right/center relative placement, direct-tap launch, empty-cell edit action, and no clipped cell.
+
+- [ ] **Step 12: Run unit, UI, lint, and build verification.**
 
 Run: `./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest :app:lintDebug :app:assembleDebug`
 
-- [ ] **Step 10: Commit.**
+Expected: all tasks succeed.
+
+- [ ] **Step 13: Commit.**
 
 ```bash
 git add app/src
-git commit -m "feat: add fixed home grid assignment"
+git commit -m "feat: add responsive home grid assignment"
 ```
 
 ## Task 4: Implement the Pure Guri Focus State Machine
@@ -333,7 +441,7 @@ sealed interface GestureOutput {
 ```
 
 - [ ] **Step 1: Write exact-threshold failing tests.** Verify 419ms is still pressing, `LongPressElapsed` at 420ms activates, moving beyond 10dp first cancels, and activation starts with no focus.
-- [ ] **Step 2: Write resolver tests from the spec.** Verify half-plane filtering; angle, distance, row/column/AppId tie-break; unavailable exclusion; and current-page-only candidates.
+- [ ] **Step 2: Write resolver tests from the spec.** Build candidates from Task 3's `ResolvedGridPosition`; verify half-plane filtering, angle, distance, resolved row/column/AppId tie-break, unavailable exclusion, current-page-only candidates, and cancellation before a viewport-driven re-resolution.
 - [ ] **Step 3: Write accumulator tests.** At STANDARD, 41dp emits no direction, 42dp emits one, 84dp emits two; diagonal ordering uses normalized magnitude, alternating axis on ties, and vertical first on the first tie.
 - [ ] **Step 4: Write release/cancel tests.** Focused `Up` emits exactly one `LaunchRequested`; unfocused `Up`, second pointer, cancel, and context change emit none and return to Idle.
 - [ ] **Step 5: Run focused tests and confirm all new tests fail.**
@@ -525,15 +633,15 @@ git commit -m "feat: add invisible pocket gesture"
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/application/settings/LauncherSettings.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/application/settings/LauncherSettingsRepository.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/infrastructure/storage/DataStoreLauncherSettingsRepository.kt`
-- Modify: `LauncherStoredState.kt`, `HomeScreen.kt`, `LauncherSettingsScreen.kt`, `GestureViewModel.kt`.
+- Modify: `LauncherStoredState.kt`, `HomeScreen.kt`, `AppGrid.kt`, `LauncherSettingsScreen.kt`, `GestureViewModel.kt`.
 - Tests: `GuriPlacementTest.kt`, `AndroidWindowModeMappingTest.kt`, Compose placement tests.
 
 **Consumes:** WindowManager `WindowInfoTracker`, window metrics, density, safe insets, and Task 5 Guri control.
 
-**Produces:** `Flow<WindowSnapshot>` with COMPACT/EXPANDED, safe bounds, optional separating hinge, and deterministic Guri center.
+**Produces:** `Flow<WindowSnapshot>` with COMPACT/EXPANDED, safe bounds, optional separating hinge, deterministic Guri center, and the safe grid viewport consumed by Task 3's `ResponsiveGridCalculator`.
 
 - [ ] **Step 1: Write pure placement tests.** Compact always yields safe-bounds bottom center; expanded LEFT/RIGHT yields selected half bottom center; a separating hinge defines the boundary; without hinge the safe-width midpoint does.
-- [ ] **Step 2: Write mapping tests for compact width, expanded width, folding posture, cutout, navigation insets, and resize.**
+- [ ] **Step 2: Write mapping tests for compact width, expanded width, folding posture, cutout, navigation insets, Guri-reserved bottom area, and the resulting safe grid viewport.**
 - [ ] **Step 3: Run and confirm failure.**
 
 Run: `./gradlew :app:testDebugUnitTest --tests '*GuriPlacementTest' --tests '*AndroidWindowModeMappingTest'`
@@ -541,7 +649,7 @@ Run: `./gradlew :app:testDebugUnitTest --tests '*GuriPlacementTest' --tests '*An
 - [ ] **Step 4: Implement immutable window models and `AndroidWindowModeProvider`.** Keep Android `Rect` and `FoldingFeature` inside Infrastructure and emit Domain coordinates.
 - [ ] **Step 5: Persist expanded Guri side with default RIGHT.** Add LEFT/RIGHT settings UI; COMPACT ignores but preserves the setting.
 - [ ] **Step 6: Update Home overlay placement.** Pocket remains at the whole-screen configured corner; Guri uses the half center; hit regions never overlap.
-- [ ] **Step 7: On any mode, safe-bounds, or hinge change, send `ContextChanged` before rendering the new position.**
+- [ ] **Step 7: On any mode, safe-bounds, hinge, or grid viewport change, send `ContextChanged` before recalculating rows/columns or rendering the new position.**
 - [ ] **Step 8: Run tests, lint, and build.**
 
 Run: `./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest :app:lintDebug :app:assembleDebug`
@@ -553,40 +661,93 @@ git add app/src
 git commit -m "feat: add fold-aware guri placement"
 ```
 
-## Task 10: Add Multiple Home Pages and Scope Guri to the Start Page
+## Task 10: Reflow Responsive Overflow Across Multiple Home Pages
 
 **Backlog:** `[MVP] 複数ホームページと現在ページ限定フォーカスを実装する`
 
 **Files:**
 
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/application/layout/HomePageIdFactory.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/application/layout/ManageHomePages.kt`
+- Create: `app/src/main/java/io/github/okaisan/gurilauncher/application/layout/ReflowHomeLayoutForGrid.kt`
 - Create: `app/src/main/java/io/github/okaisan/gurilauncher/presentation/home/HomePager.kt`
 - Modify: `HomeLayout.kt`, `HomeViewModel.kt`, `HomeScreen.kt`, `SettingsViewModel.kt`, `LauncherSettingsScreen.kt`, `GestureViewModel.kt`.
-- Tests: `ManageHomePagesTest.kt`, `HomePagerTest.kt`, `CurrentPageGestureScopeTest.kt`.
+- Test: `ManageHomePagesTest.kt`, `ReflowHomeLayoutForGridTest.kt`, `HomePagerTest.kt`, `CurrentPageGestureScopeTest.kt`.
 
-**Consumes:** Task 3 layout persistence, Task 5 Guri, Task 8 Pocket.
+**Interfaces:**
 
-**Produces:** ordered add/delete/select page operations and a pager whose overlays remain fixed.
+- Consumes: Task 3 `ResponsiveGridResolver.resolve(metrics, placements): ResolvedGrid`, Task 5 Guri, and Task 8 Pocket.
+- Produces:
 
-- [ ] **Step 1: Write use-case tests.** Add creates a stable unique page ID, delete never removes the final page, deleting current selects the nearest surviving page, reorder preserves page contents, select rejects an unknown ID.
-- [ ] **Step 2: Write gesture-scope tests.** Guri snapshots only current-page candidates on Down; changing page during Pressing or Active cancels; Pocket assignments are unchanged across page changes.
-- [ ] **Step 3: Write Compose pager tests.** Swipe updates `currentPageId`, Guri and Pocket overlay bounds stay fixed, and pager swipe is disabled while either custom gesture is active.
-- [ ] **Step 4: Run and confirm failure.**
+```kotlin
+interface HomePageIdFactory {
+    fun create(): HomePageId
+}
 
-Run: `./gradlew :app:testDebugUnitTest --tests '*ManageHomePagesTest' --tests '*CurrentPageGestureScopeTest' && ./gradlew :app:connectedDebugAndroidTest`
+class ReflowHomeLayoutForGrid(
+    private val repository: HomeLayoutRepository,
+    private val resolver: ResponsiveGridResolver,
+    private val idFactory: HomePageIdFactory,
+) {
+    suspend operator fun invoke(metrics: ResponsiveGridMetrics): ReflowResult
+}
+```
 
-- [ ] **Step 5: Implement `ManageHomePages` and atomic persistence.** Use generated UUID strings only when adding; tests inject a deterministic ID factory.
-- [ ] **Step 6: Implement `HomePager` with `HorizontalPager`.** Hoist `currentPageId`, keep custom gesture overlays outside the pager, and set `userScrollEnabled = !gestureUiState.isActive`.
-- [ ] **Step 7: Add page controls to settings and restore persisted current page after recreation.**
-- [ ] **Step 8: Run unit, UI, lint, and build verification.**
+- [ ] **Step 1: Write page-management tests.** Add creates a unique stable ID, deleting the final page is rejected, deleting current selects the nearest surviving page, reorder preserves placements, and selecting an unknown ID returns a typed error.
+
+- [ ] **Step 2: Write failing overflow reflow tests.**
+
+```kotlin
+@Test fun `shrink carries overflow to following pages without hiding apps`() = runTest {
+    repository.save(layout(page(APP_A, APP_B), page(APP_C)))
+    ReflowHomeLayoutForGrid(repository, resolver, ids)(ResponsiveGridMetrics(1, 1))
+    assertEquals(
+        listOf(listOf(APP_A), listOf(APP_C), listOf(APP_B)),
+        repository.current().pages.map { page -> page.placements.map { it.appId } },
+    )
+}
+
+@Test fun `expansion does not pull apps back to earlier page`() = runTest {
+    val split = layout(page(APP_A), page(APP_B))
+    repository.save(split)
+    ReflowHomeLayoutForGrid(repository, resolver, ids)(ResponsiveGridMetrics(6, 7))
+    assertEquals(split, repository.current())
+}
+```
+
+- [ ] **Step 3: Run the focused tests and confirm the use case is missing.**
+
+Run: `./gradlew :app:testDebugUnitTest --tests '*ManageHomePagesTest' --tests '*ReflowHomeLayoutForGridTest'`
+
+Expected: FAIL because `ReflowHomeLayoutForGrid` does not exist.
+
+- [ ] **Step 4: Implement forward-only atomic reflow.** Resolve each existing page independently. Keep resolved placements on that page; prepend no content from later pages; append its stable overflow to the next page; cascade overflow; create pages until the carry is empty. Never delete an empty existing page or pull placements backward when capacity grows.
+
+- [ ] **Step 5: Run page and reflow tests.**
+
+Run: `./gradlew :app:testDebugUnitTest --tests '*ManageHomePagesTest' --tests '*ReflowHomeLayoutForGridTest'`
+
+Expected: PASS, with every pre-reflow app ID present exactly once after shrink.
+
+- [ ] **Step 6: Write gesture-scope tests.** Guri snapshots only the current page's resolved candidates on Down. Page or grid viewport changes during Pressing/Active cancel before reflow. Pocket assignments remain global and unchanged.
+
+- [ ] **Step 7: Write Compose pager tests.** Swipe persists `currentPageId`, overlays keep fixed bounds, custom gestures disable swipe, and shrinking the injected viewport reveals overflow on following pages without clipped/hidden apps.
+
+- [ ] **Step 8: Implement `HomePager` with `HorizontalPager`.** Hoist `currentPageId`, keep custom gesture overlays outside the pager, use `userScrollEnabled = !gestureUiState.isActive`, and call reflow only after window-change cancellation.
+
+- [ ] **Step 9: Add page controls to settings and restore persisted page order, anchors, and current page after recreation.**
+
+- [ ] **Step 10: Run unit, UI, lint, and build verification.**
 
 Run: `./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest :app:lintDebug :app:assembleDebug`
 
-- [ ] **Step 9: Commit.**
+Expected: all tasks succeed.
+
+- [ ] **Step 11: Commit.**
 
 ```bash
 git add app/src
-git commit -m "feat: add multiple home pages"
+git commit -m "feat: reflow responsive grid across pages"
 ```
 
 ## Task 11: Add Integrated Emulator Verification
@@ -608,7 +769,7 @@ git commit -m "feat: add multiple home pages"
 - [ ] **Step 1: Add a deterministic test composition root.** Instrumentation tests inject an in-memory layout/settings repository, deterministic window provider, fake catalog, and recording launcher while production still uses `AndroidAppContainer`.
 - [ ] **Step 2: Write the happy-path flow test.** Assign apps, complete Guri hold/slide/release, complete LEFT and RIGHT Pocket flows for capacities 1 and 4, and assert exact launch IDs and one call per gesture.
 - [ ] **Step 3: Write cancellation flows.** Cover 419ms release, no selection, PointerCancel, two pointers, Activity recreation/background, page change, window change, removed app, and disabled component with zero launches.
-- [ ] **Step 4: Write resizable/foldable assertions.** Inject window snapshots during active gestures and assert cancellation plus new control bounds; verify Pocket corner remains page-independent.
+- [ ] **Step 4: Write resizable/foldable assertions.** Inject 320×568dp, 360×800dp, 673×841dp, COMPACT, EXPANDED, and hinge snapshots; assert cancellation occurs before grid recalculation, relative anchors resolve near the same screen position, overflow moves forward without hiding apps, Guri bounds update, and Pocket remains page-independent.
 - [ ] **Step 5: Run connected tests on API 26 and API 35 emulator images.**
 
 Run: `./gradlew :app:connectedDebugAndroidTest`
@@ -667,20 +828,20 @@ git commit -m "feat: add gesture sensitivity presets"
 ## Review Checkpoints
 
 - [ ] **After Wave A:** verify HOME registration is independent from catalog access and neither introduces broad package visibility.
-- [ ] **After Wave B:** inspect the serialized schema and confirm layout/Pocket updates use the same application-scoped DataStore atomically.
+- [ ] **After Wave B:** inspect the serialized schema and confirm GridAnchor permille values and Pocket updates use the same application-scoped DataStore atomically; verify 88dp/104dp sizing boundaries and 6×7 caps.
 - [ ] **After Wave C:** review Domain package imports and exhaustive threshold/tie/cancel tests before any pointer UI is merged.
 - [ ] **After Wave D:** inspect pointer ownership, exactly-once launch effects, accessibility semantics, and Android system gesture coexistence.
-- [ ] **After Wave E:** rotate, resize, change pages, and change fold posture during active gestures; every transition must cancel without launch.
+- [ ] **After Wave E:** rotate, resize, change pages, and change fold posture during active gestures; every transition must cancel before responsive reflow and launch nothing. Verify shrink overflow moves only forward and expansion does not pull it back.
 - [ ] **Before MVP release:** run unit, lint, build, connected emulator matrix, security/privacy review, and manual HOME-role smoke test.
 
 ## Final Acceptance
 
 - [ ] Android can select guri-launcher as the default HOME app on API 26–35.
-- [ ] The current profile's launchable apps can be assigned to stable grid positions and persist across recreation.
+- [ ] The current profile's launchable apps can be assigned by stable relative GridAnchor and persist across recreation.
 - [ ] Guri begins at compact bottom center, activates at STANDARD 420ms, begins unfocused, moves in 42dp 2D steps, and launches the current-page focused app on release.
 - [ ] Pocket is visually absent while idle, is configurable LEFT/RIGHT with exactly 1–4 unique assignments, fans icons within the same pointer sequence, and launches only a selected available app on release.
 - [ ] Expanded windows place Guri at the configured half's bottom center while Pocket stays at the configured whole-screen corner.
-- [ ] Multiple pages preserve grid positions; Pocket remains global; page changes cancel active gestures.
+- [ ] Rows and columns adapt to each safe viewport, relative screen positions are preserved, shrink overflow moves to following pages without hiding apps, expansion does not silently pull apps back, Pocket remains global, and page changes cancel active gestures.
 - [ ] Android HOME/BACK system gestures remain usable and no `QUERY_ALL_PACKAGES` permission exists.
 - [ ] Every cancellation/error path launches zero apps; every successful gesture launches exactly one app.
 - [ ] Removed or disabled apps remain in place as unavailable and are never silently replaced.
