@@ -12,21 +12,53 @@ fail() {
   exit 1
 }
 
+permission_bits() {
+  LC_ALL=C ls -ld "$1" | awk '{print substr($1, 1, 10)}'
+}
+
+decode_base64() {
+  local input_path="$1"
+  local output_path="$2"
+
+  if base64 --decode <"$input_path" >"$output_path" 2>/dev/null; then
+    return
+  fi
+  base64 -D <"$input_path" >"$output_path"
+}
+
 [[ -x "$SCRIPT" ]] || fail "$SCRIPT is missing or is not executable"
 
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/secrets" "$TEST_ROOT/config"
-readonly CONFIG_DIRECTORY_MODE="$(stat -c '%a' "$TEST_ROOT/config")"
+readonly CONFIG_DIRECTORY_MODE="$(permission_bits "$TEST_ROOT/config")"
 cat >"$TEST_ROOT/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 case "${1:-} ${2:-}" in
+  "variable get")
+    [[ "$#" -eq 9 ]] || exit 60
+    [[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 61
+    [[ "$6" == "--json" && "$7" == "value" ]] || exit 62
+    [[ "$8" == "--jq" && "$9" == ".value" ]] || exit 63
+    readonly variable_path="${FAKE_SECRET_DIRECTORY}.variables/$3"
+    [[ -f "$variable_path" ]] || exit 1
+    cat "$variable_path"
+    ;;
+  "variable set")
+    [[ "$#" -eq 5 ]] || exit 60
+    [[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 61
+    mkdir -p "${FAKE_SECRET_DIRECTORY}.variables"
+    cat >"${FAKE_SECRET_DIRECTORY}.variables/$3"
+    ;;
   "secret list")
     [[ "$#" -eq 8 ]] || exit 64
     [[ "$3" == "--repo" && "$4" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 65
     [[ "$5" == "--json" && "$6" == "name" ]] || exit 66
     [[ "$7" == "--jq" && "$8" == ".[].name" ]] || exit 67
-    find "$FAKE_SECRET_DIRECTORY" -maxdepth 1 -type f -exec basename {} \; | sort
+    for secret_path in "$FAKE_SECRET_DIRECTORY"/*; do
+      [[ -f "$secret_path" ]] || continue
+      basename "$secret_path"
+    done | sort
     ;;
   "secret set")
     [[ "$#" -eq 5 ]] || exit 64
@@ -65,16 +97,16 @@ output="$(
 )"
 
 [[ -f "$KEYSTORE_PATH" ]] || fail "release keystore was not created"
-[[ "$(stat -c '%a' "$TEST_ROOT/config")" == "$CONFIG_DIRECTORY_MODE" ]] \
+[[ "$(permission_bits "$TEST_ROOT/config")" == "$CONFIG_DIRECTORY_MODE" ]] \
   || fail "setup changed permissions of the existing keystore directory"
-[[ "$(stat -c '%a' "$KEYSTORE_PATH")" == "600" ]] \
+[[ "$(permission_bits "$KEYSTORE_PATH")" == "-rw-------" ]] \
   || fail "release keystore permissions are not owner-only"
 keytool -list -keystore "$KEYSTORE_PATH" -storepass:file "$PASSWORD_FILE" \
   -alias guri-launcher >/dev/null \
   || fail "generated keystore does not contain the release alias"
 
-base64 --decode "$TEST_ROOT/secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
-  >"$TEST_ROOT/uploaded.keystore"
+decode_base64 "$TEST_ROOT/secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$TEST_ROOT/uploaded.keystore"
 cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/uploaded.keystore" \
   || fail "uploaded keystore secret differs from the generated keystore"
 [[ "$(<"$TEST_ROOT/secrets/ANDROID_RELEASE_KEYSTORE_PASSWORD")" == "$PASSWORD" ]] \
@@ -86,14 +118,60 @@ cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/uploaded.keystore" \
 [[ "$output" != *"$PASSWORD"* ]] || fail "password was written to output"
 [[ "$output" == *"Back up the keystore"* ]] \
   || fail "successful setup did not explain that the keystore needs a backup"
+[[ -f "$TEST_ROOT/secrets.variables/ANDROID_RELEASE_CERT_SHA256" ]] \
+  || fail "setup did not persist the release certificate fingerprint"
+[[ "$(<"$TEST_ROOT/secrets.variables/ANDROID_RELEASE_CERT_SHA256")" \
+  =~ ^[0-9A-F]{64}$ ]] \
+  || fail "persisted release certificate fingerprint is invalid"
+
+# An existing but different keystore must not replace the configured signer.
+mkdir -p "$TEST_ROOT/wrong-key-secrets" "$TEST_ROOT/wrong-key-config"
+cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/wrong-key-secrets/"
+mkdir -p "$TEST_ROOT/wrong-key-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/"* "$TEST_ROOT/wrong-key-secrets.variables/"
+readonly WRONG_KEYSTORE_PATH="$TEST_ROOT/wrong-key-config/release.keystore"
+keytool -genkeypair -noprompt \
+  -alias guri-launcher \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 1 \
+  -dname "CN=different signer" \
+  -keystore "$WRONG_KEYSTORE_PATH" \
+  -storetype PKCS12 \
+  -storepass:file "$PASSWORD_FILE" \
+  -keypass:file "$PASSWORD_FILE" >/dev/null
+readonly ORIGINAL_SECRET_BEFORE_WRONG_KEY="$TEST_ROOT/original-before-wrong-key"
+cp "$TEST_ROOT/wrong-key-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$ORIGINAL_SECRET_BEFORE_WRONG_KEY"
+set +e
+wrong_key_output="$(
+  printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/wrong-key-secrets" \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$WRONG_KEYSTORE_PATH" \
+      "$SCRIPT" 2>&1
+)"
+wrong_key_status=$?
+set -e
+
+[[ "$wrong_key_status" -eq 2 ]] \
+  || fail "existing wrong keystore replaced the configured signer"
+[[ "$wrong_key_output" == *"certificate fingerprint does not match"* ]] \
+  || fail "existing wrong keystore did not explain the signer mismatch"
+cmp -s "$TEST_ROOT/wrong-key-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$ORIGINAL_SECRET_BEFORE_WRONG_KEY" \
+  || fail "existing wrong keystore overwrote the configured signer"
 
 # Missing local key material must not silently replace already-configured secrets.
 mkdir -p "$TEST_ROOT/rotation-guard-secrets" "$TEST_ROOT/rotation-guard-config"
 cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/rotation-guard-secrets/"
-readonly GUARDED_SECRET_DIGEST="$(
-  sha256sum "$TEST_ROOT/rotation-guard-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
-    | awk '{print $1}'
-)"
+mkdir -p "$TEST_ROOT/rotation-guard-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/"* "$TEST_ROOT/rotation-guard-secrets.variables/"
+readonly GUARDED_SECRET_COPY="$TEST_ROOT/original-guarded-secret"
+cp "$TEST_ROOT/rotation-guard-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$GUARDED_SECRET_COPY"
 set +e
 rotation_guard_output="$(
   printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
@@ -113,15 +191,15 @@ set -e
   || fail "missing local key did not explain the existing signing-secret conflict"
 [[ ! -e "$TEST_ROOT/rotation-guard-config/release.keystore" ]] \
   || fail "missing local key generated a replacement without confirmation"
-[[ "$(
-  sha256sum "$TEST_ROOT/rotation-guard-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
-    | awk '{print $1}'
-)" == "$GUARDED_SECRET_DIGEST" ]] \
+cmp -s "$TEST_ROOT/rotation-guard-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$GUARDED_SECRET_COPY" \
   || fail "missing local key overwrote the configured keystore secret"
 
 # Rotation needs both the explicit opt-in and an exact interactive confirmation.
 mkdir -p "$TEST_ROOT/rotation-abort-secrets" "$TEST_ROOT/rotation-abort-config"
 cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/rotation-abort-secrets/"
+mkdir -p "$TEST_ROOT/rotation-abort-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/"* "$TEST_ROOT/rotation-abort-secrets.variables/"
 set +e
 rotation_abort_output="$(
   printf '%s\n' 'DO NOT ROTATE' \
@@ -145,6 +223,8 @@ set -e
 
 mkdir -p "$TEST_ROOT/rotation-confirm-secrets" "$TEST_ROOT/rotation-confirm-config"
 cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/rotation-confirm-secrets/"
+mkdir -p "$TEST_ROOT/rotation-confirm-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/"* "$TEST_ROOT/rotation-confirm-secrets.variables/"
 set +e
 rotation_confirm_output="$(
   printf '%s\n%s\n%s\n' 'ROTATE RELEASE KEY' "$PASSWORD" "$PASSWORD" \
@@ -163,8 +243,8 @@ set -e
   || fail "confirmed release-key rotation failed: $rotation_confirm_output"
 [[ -f "$TEST_ROOT/rotation-confirm-config/release.keystore" ]] \
   || fail "confirmed release-key rotation did not generate a keystore"
-base64 --decode "$TEST_ROOT/rotation-confirm-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
-  >"$TEST_ROOT/rotated-upload.keystore"
+decode_base64 "$TEST_ROOT/rotation-confirm-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$TEST_ROOT/rotated-upload.keystore"
 cmp -s "$TEST_ROOT/rotation-confirm-config/release.keystore" \
   "$TEST_ROOT/rotated-upload.keystore" \
   || fail "confirmed release-key rotation did not upload the new keystore"
@@ -246,8 +326,12 @@ set -e
   || fail "repository-local keystore was uploaded"
 
 # Re-running setup must preserve the existing key while restoring its secrets.
-readonly ORIGINAL_KEYSTORE_DIGEST="$(sha256sum "$KEYSTORE_PATH" | awk '{print $1}')"
+readonly ORIGINAL_KEYSTORE_COPY="$TEST_ROOT/original-release.keystore"
+cp "$KEYSTORE_PATH" "$ORIGINAL_KEYSTORE_COPY"
 mkdir -p "$TEST_ROOT/reuse-secrets"
+cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/reuse-secrets/"
+mkdir -p "$TEST_ROOT/reuse-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/"* "$TEST_ROOT/reuse-secrets.variables/"
 set +e
 reuse_output="$(
   printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
@@ -263,10 +347,10 @@ set -e
 
 [[ "$reuse_status" -eq 0 ]] \
   || fail "reusing the signing key failed with status $reuse_status: $reuse_output"
-[[ "$(sha256sum "$KEYSTORE_PATH" | awk '{print $1}')" == "$ORIGINAL_KEYSTORE_DIGEST" ]] \
+cmp -s "$KEYSTORE_PATH" "$ORIGINAL_KEYSTORE_COPY" \
   || fail "re-running setup replaced the existing signing key"
-base64 --decode "$TEST_ROOT/reuse-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
-  >"$TEST_ROOT/reused-upload.keystore"
+decode_base64 "$TEST_ROOT/reuse-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$TEST_ROOT/reused-upload.keystore"
 cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/reused-upload.keystore" \
   || fail "re-running setup uploaded a different signing key"
 [[ "$reuse_output" == *"Using existing release keystore"* ]] \

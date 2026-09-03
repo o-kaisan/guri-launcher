@@ -6,6 +6,7 @@ umask 077
 readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly GITHUB_REPOSITORY="${GURI_GITHUB_REPOSITORY:-o-kaisan/guri-launcher}"
 readonly KEY_ALIAS="guri-launcher"
+readonly CERT_FINGERPRINT_VARIABLE="ANDROID_RELEASE_CERT_SHA256"
 readonly ALLOW_KEY_ROTATION="${GURI_ALLOW_RELEASE_KEY_ROTATION:-false}"
 readonly CONFIG_DIRECTORY="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}/guri-launcher"
 readonly KEYSTORE_PATH_INPUT="${GURI_RELEASE_KEYSTORE_PATH:-$CONFIG_DIRECTORY/release.keystore}"
@@ -56,34 +57,44 @@ if [[ -L "$KEYSTORE_PATH" ]]; then
   exit 2
 fi
 
-if [[ ! -e "$KEYSTORE_PATH" ]]; then
-  existing_secret_names="$(
-    gh secret list --repo "$GITHUB_REPOSITORY" --json name --jq '.[].name'
-  )"
-  signing_secrets_exist=false
-  for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
-    while IFS= read -r existing_secret_name; do
-      if [[ "$existing_secret_name" == "$signing_secret_name" ]]; then
-        signing_secrets_exist=true
-        break 2
-      fi
-    done <<<"$existing_secret_names"
-  done
+rotation_confirmed=false
+confirm_key_rotation() {
+  local reason="$1"
 
-  if [[ "$signing_secrets_exist" == true ]]; then
-    if [[ "$ALLOW_KEY_ROTATION" != true ]]; then
-      echo "error: signing secrets already exist, but the local release keystore is missing." >&2
-      echo "Restore the original keystore or explicitly authorize an incompatible key rotation." >&2
-      exit 2
-    fi
-    echo "warning: rotating the release key prevents updates to every existing installation." >&2
-    printf 'Type ROTATE RELEASE KEY to continue: ' >&2
-    if ! IFS= read -r rotation_confirmation \
-      || [[ "$rotation_confirmation" != "ROTATE RELEASE KEY" ]]; then
-      echo "error: release-key rotation was not confirmed." >&2
-      exit 2
-    fi
+  if [[ "$ALLOW_KEY_ROTATION" != true ]]; then
+    printf 'error: %s\n' "$reason" >&2
+    echo "Restore the original keystore or explicitly authorize an incompatible key rotation." >&2
+    exit 2
   fi
+  echo "warning: rotating the release key prevents updates to every existing installation." >&2
+  printf 'Type ROTATE RELEASE KEY to continue: ' >&2
+  if ! IFS= read -r rotation_confirmation \
+    || [[ "$rotation_confirmation" != "ROTATE RELEASE KEY" ]]; then
+    echo "error: release-key rotation was not confirmed." >&2
+    exit 2
+  fi
+  rotation_confirmed=true
+}
+
+existing_secret_names="$(
+  gh secret list --repo "$GITHUB_REPOSITORY" --json name --jq '.[].name'
+)"
+signing_secrets_exist=false
+for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
+  while IFS= read -r existing_secret_name; do
+    if [[ "$existing_secret_name" == "$signing_secret_name" ]]; then
+      signing_secrets_exist=true
+      break 2
+    fi
+  done <<<"$existing_secret_names"
+done
+
+keystore_existed=false
+if [[ -e "$KEYSTORE_PATH" ]]; then
+  keystore_existed=true
+elif [[ "$signing_secrets_exist" == true ]]; then
+  confirm_key_rotation \
+    "signing secrets already exist, but the local release keystore is missing."
 fi
 
 printf 'Release-key password: ' >&2
@@ -112,7 +123,7 @@ cleanup() {
 trap cleanup EXIT
 printf '%s' "$key_password" >"$PASSWORD_FILE"
 
-if [[ -e "$KEYSTORE_PATH" ]]; then
+if [[ "$keystore_existed" == true ]]; then
   if ! keytool -list \
     -alias "$KEY_ALIAS" \
     -keystore "$KEYSTORE_PATH" \
@@ -136,6 +147,61 @@ else
 fi
 chmod 600 "$KEYSTORE_PATH"
 
+if ! keytool_details="$(
+  LC_ALL=C keytool \
+    -J-Duser.language=en \
+    -J-Duser.country=US \
+    -list -v \
+    -alias "$KEY_ALIAS" \
+    -keystore "$KEYSTORE_PATH" \
+    -storepass:file "$PASSWORD_FILE" 2>/dev/null
+)"; then
+  echo "error: could not read the release certificate fingerprint." >&2
+  exit 2
+fi
+release_cert_sha256=''
+while IFS= read -r keytool_line; do
+  if [[ "$keytool_line" =~ SHA256:[[:space:]]*([0-9A-Fa-f:]+) ]]; then
+    release_cert_sha256="${BASH_REMATCH[1]}"
+    break
+  fi
+done <<<"$keytool_details"
+release_cert_sha256="$(
+  printf '%s' "$release_cert_sha256" \
+    | tr -d ':' \
+    | tr '[:lower:]' '[:upper:]'
+)"
+if [[ ! "$release_cert_sha256" =~ ^[0-9A-F]{64}$ ]]; then
+  echo "error: keytool did not return a valid SHA-256 certificate fingerprint." >&2
+  exit 2
+fi
+readonly RELEASE_CERT_SHA256="$release_cert_sha256"
+
+if [[ "$signing_secrets_exist" == true && "$rotation_confirmed" != true ]]; then
+  configured_cert_sha256=''
+  if configured_cert_sha256="$(
+    gh variable get "$CERT_FINGERPRINT_VARIABLE" \
+      --repo "$GITHUB_REPOSITORY" \
+      --json value \
+      --jq .value 2>/dev/null
+  )"; then
+    configured_cert_sha256="$(
+      printf '%s' "$configured_cert_sha256" \
+        | tr -d ':[:space:]' \
+        | tr '[:lower:]' '[:upper:]'
+    )"
+  fi
+
+  if [[ "$configured_cert_sha256" != "$RELEASE_CERT_SHA256" ]]; then
+    if [[ -z "$configured_cert_sha256" ]]; then
+      rotation_reason="signing secrets already exist, but their certificate fingerprint is unavailable."
+    else
+      rotation_reason="certificate fingerprint does not match the configured release signer."
+    fi
+    confirm_key_rotation "$rotation_reason"
+  fi
+fi
+
 base64 <"$KEYSTORE_PATH" | tr -d '\n' \
   | gh secret set ANDROID_RELEASE_KEYSTORE_BASE64 --repo "$GITHUB_REPOSITORY"
 printf '%s' "$key_password" \
@@ -144,10 +210,13 @@ printf '%s' "$KEY_ALIAS" \
   | gh secret set ANDROID_RELEASE_KEY_ALIAS --repo "$GITHUB_REPOSITORY"
 printf '%s' "$key_password" \
   | gh secret set ANDROID_RELEASE_KEY_PASSWORD --repo "$GITHUB_REPOSITORY"
+printf '%s' "$RELEASE_CERT_SHA256" \
+  | gh variable set "$CERT_FINGERPRINT_VARIABLE" --repo "$GITHUB_REPOSITORY"
 
 key_password=''
 key_password_confirmation=''
 
 printf 'Signing secrets configured for %s.\n' "$GITHUB_REPOSITORY"
+printf 'Release certificate SHA-256: %s\n' "$RELEASE_CERT_SHA256"
 printf 'Back up the keystore at %s and its password; both are required for future updates.\n' \
   "$KEYSTORE_PATH"

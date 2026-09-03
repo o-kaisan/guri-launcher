@@ -44,6 +44,8 @@ make release-signing-setup
 - `ANDROID_RELEASE_KEY_ALIAS`
 - `ANDROID_RELEASE_KEY_PASSWORD`
 
+さらに、秘密情報ではない公開証明書の指紋をActions Variable `ANDROID_RELEASE_CERT_SHA256` に登録します。再実行時はこの指紋をローカル鍵と照合し、異なる署名鍵によるSecretsの置換を防ぎます。
+
 リリース鍵とパスワードを失うと、インストール済みアプリを上書き更新できません。リポジトリには追加せず、両方を安全な別の場所にもバックアップしてください。Secrets登録だけをやり直す場合は、同じ保存先とパスワードでもう一度コマンドを実行します。保存先を変更する場合は、リポジトリ外のパスを指定します。
 
 ```shell
