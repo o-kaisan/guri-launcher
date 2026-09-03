@@ -417,7 +417,7 @@ git commit -m "feat: add continuous guri gesture"
 Run: `./gradlew :app:testDebugUnitTest --tests '*PocketConfigurationTest' --tests '*UpdatePocketConfigurationTest'`
 
 - [ ] **Step 3: Implement immutable Domain values and an atomic update use case.** Return typed validation errors instead of partially saving a draft.
-- [ ] **Step 4: Implement Pocket DTO mapping over the schema-1 nullable Pocket fields created in Task 2.** Existing home fields remain byte-for-byte equivalent after a Pocket-only update. Default side for a new draft is LEFT; the persisted value remains null until all slots are valid.
+- [ ] **Step 4: Implement Pocket DTO mapping over the schema-1 nullable Pocket fields created in Task 2.** Existing home fields remain byte-for-byte equivalent after a Pocket-only update. A new draft starts with side LEFT and capacity 4; the persisted value remains null until all four slots are valid or the user explicitly chooses another capacity and fills every slot.
 - [ ] **Step 5: Implement settings UI.** Add LEFT/RIGHT segmented choice, capacity choices 1–4, ordered slots, picker, reorder, remove, save, clear, and disabled unavailable rows that retain their IDs.
 - [ ] **Step 6: Add repository round-trip and process recreation UI tests.**
 - [ ] **Step 7: Run unit, UI, lint, and build verification.**
