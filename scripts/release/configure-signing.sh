@@ -89,12 +89,36 @@ for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
   done <<<"$existing_secret_names"
 done
 
+if ! configured_fingerprint_record="$(
+  gh variable list \
+    --repo "$GITHUB_REPOSITORY" \
+    --json name,value \
+    --jq ".[] | select(.name == \"$CERT_FINGERPRINT_VARIABLE\") | [.name, .value] | @tsv"
+)"; then
+  echo "error: could not inspect the configured release certificate fingerprint." >&2
+  exit 1
+fi
+configured_cert_fingerprint_exists=false
+configured_cert_sha256=''
+if [[ -n "$configured_fingerprint_record" ]]; then
+  configured_cert_fingerprint_exists=true
+  configured_cert_sha256="${configured_fingerprint_record#*$'\t'}"
+  configured_cert_sha256="$(
+    printf '%s' "$configured_cert_sha256" \
+      | tr -d ':[:space:]' \
+      | tr '[:lower:]' '[:upper:]'
+  )"
+fi
+
 keystore_existed=false
 if [[ -e "$KEYSTORE_PATH" ]]; then
   keystore_existed=true
 elif [[ "$signing_secrets_exist" == true ]]; then
   confirm_key_rotation \
     "signing secrets already exist, but the local release keystore is missing."
+elif [[ "$configured_cert_fingerprint_exists" == true ]]; then
+  confirm_key_rotation \
+    "a release signer fingerprint already exists, but the local release keystore is missing."
 fi
 
 printf 'Release-key password: ' >&2
@@ -177,24 +201,14 @@ if [[ ! "$release_cert_sha256" =~ ^[0-9A-F]{64}$ ]]; then
 fi
 readonly RELEASE_CERT_SHA256="$release_cert_sha256"
 
-if [[ "$signing_secrets_exist" == true && "$rotation_confirmed" != true ]]; then
-  configured_cert_sha256=''
-  if configured_cert_sha256="$(
-    gh variable get "$CERT_FINGERPRINT_VARIABLE" \
-      --repo "$GITHUB_REPOSITORY" \
-      --json value \
-      --jq .value 2>/dev/null
-  )"; then
-    configured_cert_sha256="$(
-      printf '%s' "$configured_cert_sha256" \
-        | tr -d ':[:space:]' \
-        | tr '[:lower:]' '[:upper:]'
-    )"
-  fi
-
+if [[ "$rotation_confirmed" != true \
+  && ( "$signing_secrets_exist" == true \
+    || "$configured_cert_fingerprint_exists" == true ) ]]; then
   if [[ "$configured_cert_sha256" != "$RELEASE_CERT_SHA256" ]]; then
-    if [[ -z "$configured_cert_sha256" ]]; then
+    if [[ "$configured_cert_fingerprint_exists" != true ]]; then
       rotation_reason="signing secrets already exist, but their certificate fingerprint is unavailable."
+    elif [[ ! "$configured_cert_sha256" =~ ^[0-9A-F]{64}$ ]]; then
+      rotation_reason="the configured release certificate fingerprint is invalid."
     else
       rotation_reason="certificate fingerprint does not match the configured release signer."
     fi

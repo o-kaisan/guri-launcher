@@ -35,6 +35,7 @@ release-test: ## Release用scriptのテストを実行する
 	$(RELEASE_SCRIPTS)/test-release-metadata.sh
 	$(RELEASE_SCRIPTS)/test-configure-signing.sh
 	$(RELEASE_SCRIPTS)/test-verify-release-tag.sh
+	$(RELEASE_SCRIPTS)/test-publish-release.sh
 
 release-signing-setup: ## Release署名鍵を作成してGitHub Secretsへ登録する
 	$(RELEASE_SCRIPTS)/configure-signing.sh

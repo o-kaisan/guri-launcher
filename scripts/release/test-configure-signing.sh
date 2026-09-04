@@ -35,14 +35,20 @@ cat >"$TEST_ROOT/bin/gh" <<'EOF'
 set -euo pipefail
 
 case "${1:-} ${2:-}" in
-  "variable get")
-    [[ "$#" -eq 9 ]] || exit 60
-    [[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 61
-    [[ "$6" == "--json" && "$7" == "value" ]] || exit 62
-    [[ "$8" == "--jq" && "$9" == ".value" ]] || exit 63
-    readonly variable_path="${FAKE_SECRET_DIRECTORY}.variables/$3"
-    [[ -f "$variable_path" ]] || exit 1
-    cat "$variable_path"
+  "variable list")
+    [[ "$#" -eq 8 ]] || exit 60
+    [[ "$3" == "--repo" && "$4" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 61
+    [[ "$5" == "--json" && "$6" == "name,value" ]] || exit 62
+    [[ "$7" == "--jq" ]] || exit 63
+    [[ "$8" == '.[] | select(.name == "ANDROID_RELEASE_CERT_SHA256") | [.name, .value] | @tsv' ]] \
+      || exit 64
+    [[ "${FAKE_VARIABLE_LIST_FAILURE:-false}" != true ]] || exit 65
+    readonly variable_path="${FAKE_SECRET_DIRECTORY}.variables/ANDROID_RELEASE_CERT_SHA256"
+    if [[ -f "$variable_path" ]]; then
+      printf 'ANDROID_RELEASE_CERT_SHA256\t'
+      cat "$variable_path"
+      printf '\n'
+    fi
     ;;
   "variable set")
     [[ "$#" -eq 5 ]] || exit 60
@@ -124,6 +130,30 @@ cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/uploaded.keystore" \
   =~ ^[0-9A-F]{64}$ ]] \
   || fail "persisted release certificate fingerprint is invalid"
 
+# Fingerprint lookup failures must stop before any signing material changes.
+mkdir -p "$TEST_ROOT/fingerprint-lookup-secrets" "$TEST_ROOT/fingerprint-lookup-config"
+set +e
+fingerprint_lookup_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" \
+    FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+    FAKE_SECRET_DIRECTORY="$TEST_ROOT/fingerprint-lookup-secrets" \
+    FAKE_VARIABLE_LIST_FAILURE=true \
+    GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+    GURI_RELEASE_KEYSTORE_PATH="$TEST_ROOT/fingerprint-lookup-config/release.keystore" \
+    "$SCRIPT" 2>&1
+)"
+fingerprint_lookup_status=$?
+set -e
+
+[[ "$fingerprint_lookup_status" -eq 1 ]] \
+  || fail "fingerprint lookup failure returned status $fingerprint_lookup_status"
+[[ "$fingerprint_lookup_output" == *"could not inspect"* ]] \
+  || fail "fingerprint lookup failure did not explain why setup stopped"
+[[ ! -e "$TEST_ROOT/fingerprint-lookup-config/release.keystore" ]] \
+  || fail "fingerprint lookup failure generated a keystore"
+[[ -z "$(find "$TEST_ROOT/fingerprint-lookup-secrets" -type f -print -quit)" ]] \
+  || fail "fingerprint lookup failure uploaded signing secrets"
+
 # An existing but different keystore must not replace the configured signer.
 mkdir -p "$TEST_ROOT/wrong-key-secrets" "$TEST_ROOT/wrong-key-config"
 cp "$TEST_ROOT/secrets/"* "$TEST_ROOT/wrong-key-secrets/"
@@ -163,6 +193,93 @@ set -e
 cmp -s "$TEST_ROOT/wrong-key-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
   "$ORIGINAL_SECRET_BEFORE_WRONG_KEY" \
   || fail "existing wrong keystore overwrote the configured signer"
+
+# The persisted fingerprint remains authoritative if all signing secrets are absent.
+mkdir -p \
+  "$TEST_ROOT/fingerprint-only-missing-secrets" \
+  "$TEST_ROOT/fingerprint-only-missing-config" \
+  "$TEST_ROOT/fingerprint-only-missing-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/ANDROID_RELEASE_CERT_SHA256" \
+  "$TEST_ROOT/fingerprint-only-missing-secrets.variables/ANDROID_RELEASE_CERT_SHA256"
+readonly FINGERPRINT_ONLY_MISSING_COPY="$TEST_ROOT/fingerprint-only-missing-copy"
+cp "$TEST_ROOT/fingerprint-only-missing-secrets.variables/ANDROID_RELEASE_CERT_SHA256" \
+  "$FINGERPRINT_ONLY_MISSING_COPY"
+set +e
+fingerprint_only_missing_output="$(
+  printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/fingerprint-only-missing-secrets" \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$TEST_ROOT/fingerprint-only-missing-config/release.keystore" \
+      "$SCRIPT" 2>&1
+)"
+fingerprint_only_missing_status=$?
+set -e
+
+[[ "$fingerprint_only_missing_status" -eq 2 ]] \
+  || fail "persisted fingerprint did not guard a missing local keystore"
+[[ "$fingerprint_only_missing_output" == *"fingerprint already exists"* ]] \
+  || fail "fingerprint-only guard did not explain the signer conflict"
+[[ ! -e "$TEST_ROOT/fingerprint-only-missing-config/release.keystore" ]] \
+  || fail "fingerprint-only guard generated a replacement keystore"
+[[ -z "$(find "$TEST_ROOT/fingerprint-only-missing-secrets" -type f -print -quit)" ]] \
+  || fail "fingerprint-only guard uploaded replacement signing secrets"
+cmp -s \
+  "$TEST_ROOT/fingerprint-only-missing-secrets.variables/ANDROID_RELEASE_CERT_SHA256" \
+  "$FINGERPRINT_ONLY_MISSING_COPY" \
+  || fail "fingerprint-only guard replaced the persisted signer identity"
+
+mkdir -p \
+  "$TEST_ROOT/fingerprint-only-wrong-secrets" \
+  "$TEST_ROOT/fingerprint-only-wrong-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/ANDROID_RELEASE_CERT_SHA256" \
+  "$TEST_ROOT/fingerprint-only-wrong-secrets.variables/ANDROID_RELEASE_CERT_SHA256"
+set +e
+fingerprint_only_wrong_output="$(
+  printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/fingerprint-only-wrong-secrets" \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$WRONG_KEYSTORE_PATH" \
+      "$SCRIPT" 2>&1
+)"
+fingerprint_only_wrong_status=$?
+set -e
+
+[[ "$fingerprint_only_wrong_status" -eq 2 ]] \
+  || fail "persisted fingerprint accepted a different existing keystore"
+[[ "$fingerprint_only_wrong_output" == *"certificate fingerprint does not match"* ]] \
+  || fail "fingerprint-only mismatch did not explain the signer conflict"
+[[ -z "$(find "$TEST_ROOT/fingerprint-only-wrong-secrets" -type f -print -quit)" ]] \
+  || fail "fingerprint-only mismatch uploaded replacement signing secrets"
+
+mkdir -p \
+  "$TEST_ROOT/fingerprint-only-recovery-secrets" \
+  "$TEST_ROOT/fingerprint-only-recovery-secrets.variables"
+cp "$TEST_ROOT/secrets.variables/ANDROID_RELEASE_CERT_SHA256" \
+  "$TEST_ROOT/fingerprint-only-recovery-secrets.variables/ANDROID_RELEASE_CERT_SHA256"
+set +e
+fingerprint_only_recovery_output="$(
+  printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/fingerprint-only-recovery-secrets" \
+      GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
+      GURI_RELEASE_KEYSTORE_PATH="$KEYSTORE_PATH" \
+      "$SCRIPT" 2>&1
+)"
+fingerprint_only_recovery_status=$?
+set -e
+
+[[ "$fingerprint_only_recovery_status" -eq 0 ]] \
+  || fail "matching fingerprint could not restore deleted signing secrets: $fingerprint_only_recovery_output"
+decode_base64 \
+  "$TEST_ROOT/fingerprint-only-recovery-secrets/ANDROID_RELEASE_KEYSTORE_BASE64" \
+  "$TEST_ROOT/fingerprint-only-recovery-upload.keystore"
+cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/fingerprint-only-recovery-upload.keystore" \
+  || fail "fingerprint-only recovery uploaded a different signing key"
 
 # Missing local key material must not silently replace already-configured secrets.
 mkdir -p "$TEST_ROOT/rotation-guard-secrets" "$TEST_ROOT/rotation-guard-config"
