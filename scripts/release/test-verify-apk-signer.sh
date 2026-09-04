@@ -23,8 +23,8 @@ printf '%s\n' "$*" >>"$FAKE_APKSIGNER_LOG"
 [[ -f "$4" ]] || exit 62
 [[ "${FAKE_APKSIGNER_FAILURE:-false}" != true ]] || exit 63
 if [[ "${FAKE_MISSING_CERTIFICATE:-false}" != true ]]; then
-  printf 'Signer %s certificate SHA-256 digest: %s\n' \
-    "${FAKE_SIGNER_LABEL:-#1}" "$FAKE_SIGNER_DIGEST"
+  printf '%s certificate SHA-256 digest: %s\n' \
+    "${FAKE_SIGNER_PREFIX:-Signer ${FAKE_SIGNER_LABEL:-#1}}" "$FAKE_SIGNER_DIGEST"
 fi
 if [[ "${FAKE_SECOND_SIGNER_DIGEST:-}" != '' ]]; then
   printf 'Signer #2 certificate SHA-256 digest: %s\n' "$FAKE_SECOND_SIGNER_DIGEST"
@@ -58,6 +58,15 @@ targeted_output="$(
 )"
 [[ "$targeted_output" == *"match the configured release signer"* ]] \
   || fail "SDK-targeted matching APK signer was not accepted"
+
+v2_output="$(
+  APKSIGNER="$TEST_ROOT/bin/apksigner" \
+    FAKE_SIGNER_DIGEST="$EXPECTED_FINGERPRINT_LOWER" \
+    FAKE_SIGNER_PREFIX='V2 Signer:' \
+    "$SCRIPT" "$APK_PATH" "$EXPECTED_FINGERPRINT"
+)"
+[[ "$v2_output" == *"match the configured release signer"* ]] \
+  || fail "V2 signer output from apksigner was not accepted"
 
 set +e
 mismatch_output="$(

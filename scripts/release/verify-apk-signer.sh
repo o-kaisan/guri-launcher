@@ -41,12 +41,12 @@ if ! signer_output="$(
 fi
 
 signer_count=0
-readonly SIGNER_DIGEST_PATTERN='^Signer (#[0-9]+|\(.*\)) certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f:]+)[[:space:]]*$'
+readonly SIGNER_DIGEST_PATTERN='^(Signer (#[0-9]+|\([^)]*\))|V[0-9]+ Signer:) certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f:]+)[[:space:]]*$'
 while IFS= read -r signer_line; do
   if [[ "$signer_line" =~ $SIGNER_DIGEST_PATTERN ]]; then
     ((signer_count += 1))
     actual_cert_sha256="$(
-      printf '%s' "${BASH_REMATCH[2]}" \
+      printf '%s' "${BASH_REMATCH[3]}" \
         | tr -d ':' \
         | tr '[:lower:]' '[:upper:]'
     )"
