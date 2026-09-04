@@ -23,7 +23,8 @@ printf '%s\n' "$*" >>"$FAKE_APKSIGNER_LOG"
 [[ -f "$4" ]] || exit 62
 [[ "${FAKE_APKSIGNER_FAILURE:-false}" != true ]] || exit 63
 if [[ "${FAKE_MISSING_CERTIFICATE:-false}" != true ]]; then
-  printf 'Signer #1 certificate SHA-256 digest: %s\n' "$FAKE_SIGNER_DIGEST"
+  printf 'Signer %s certificate SHA-256 digest: %s\n' \
+    "${FAKE_SIGNER_LABEL:-#1}" "$FAKE_SIGNER_DIGEST"
 fi
 if [[ "${FAKE_SECOND_SIGNER_DIGEST:-}" != '' ]]; then
   printf 'Signer #2 certificate SHA-256 digest: %s\n' "$FAKE_SECOND_SIGNER_DIGEST"
@@ -46,8 +47,17 @@ output="$(
     FAKE_SIGNER_DIGEST="$EXPECTED_FINGERPRINT_LOWER" \
     "$SCRIPT" "$APK_PATH" "$EXPECTED_FINGERPRINT"
 )"
-[[ "$output" == *"matches the configured release signer"* ]] \
+[[ "$output" == *"match the configured release signer"* ]] \
   || fail "matching APK signer was not accepted"
+
+targeted_output="$(
+  APKSIGNER="$TEST_ROOT/bin/apksigner" \
+    FAKE_SIGNER_DIGEST="$EXPECTED_FINGERPRINT_LOWER" \
+    FAKE_SIGNER_LABEL='(minSdkVersion=24, maxSdkVersion=32)' \
+    "$SCRIPT" "$APK_PATH" "$EXPECTED_FINGERPRINT"
+)"
+[[ "$targeted_output" == *"match the configured release signer"* ]] \
+  || fail "SDK-targeted matching APK signer was not accepted"
 
 set +e
 mismatch_output="$(
@@ -73,8 +83,17 @@ multiple_status=$?
 set -e
 [[ "$multiple_status" -eq 2 ]] \
   || fail "APK with multiple signers returned status $multiple_status"
-[[ "$multiple_output" == *"exactly one signer"* ]] \
-  || fail "APK with multiple signers did not explain the signer-count requirement"
+[[ "$multiple_output" == *"does not match"* ]] \
+  || fail "APK with a different targeted signer did not explain the identity mismatch"
+
+multiple_matching_output="$(
+  APKSIGNER="$TEST_ROOT/bin/apksigner" \
+    FAKE_SIGNER_DIGEST="$EXPECTED_FINGERPRINT" \
+    FAKE_SECOND_SIGNER_DIGEST="$EXPECTED_FINGERPRINT_LOWER" \
+    "$SCRIPT" "$APK_PATH" "$EXPECTED_FINGERPRINT"
+)"
+[[ "$multiple_matching_output" == *"match the configured release signer"* ]] \
+  || fail "multiple SDK-targeted entries for the configured signer were not accepted"
 
 : >"$FAKE_APKSIGNER_LOG"
 set +e
