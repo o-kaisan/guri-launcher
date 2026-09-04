@@ -36,8 +36,9 @@ release-test: ## Release用scriptのテストを実行する
 	$(RELEASE_SCRIPTS)/test-configure-signing.sh
 	$(RELEASE_SCRIPTS)/test-verify-release-tag.sh
 	$(RELEASE_SCRIPTS)/test-publish-release.sh
+	$(RELEASE_SCRIPTS)/test-verify-apk-signer.sh
 
-release-signing-setup: ## Release署名鍵を作成してGitHub Secretsへ登録する
+release-signing-setup: ## Release署名鍵と保護Environmentを設定する
 	$(RELEASE_SCRIPTS)/configure-signing.sh
 
 android-sdk: ## Android 17 emulator 用 Android SDK を導入する

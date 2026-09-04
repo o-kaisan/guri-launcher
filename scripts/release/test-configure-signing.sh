@@ -35,14 +35,32 @@ cat >"$TEST_ROOT/bin/gh" <<'EOF'
 set -euo pipefail
 
 case "${1:-} ${2:-}" in
+  "api user")
+    [[ "$#" -eq 4 ]] || exit 50
+    [[ "$3" == "--jq" && "$4" == ".id" ]] || exit 51
+    printf '32049192\n'
+    ;;
+  "api --method")
+    [[ "$#" -eq 6 ]] || exit 52
+    [[ "$3" == "PUT" ]] || exit 53
+    [[ "$4" == "repos/$FAKE_EXPECTED_REPOSITORY/environments/release" ]] || exit 54
+    [[ "$5" == "--input" && "$6" == "-" ]] || exit 55
+    readonly environment_payload="$(cat)"
+    [[ "$environment_payload" == \
+      '{"wait_timer":0,"prevent_self_review":false,"reviewers":[{"type":"User","id":32049192}],"deployment_branch_policy":null}' ]] \
+      || exit 56
+    printf '%s\n' "$environment_payload" >"${FAKE_SECRET_DIRECTORY}.environment"
+    ;;
   "variable list")
-    [[ "$#" -eq 8 ]] || exit 60
-    [[ "$3" == "--repo" && "$4" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 61
-    [[ "$5" == "--json" && "$6" == "name,value" ]] || exit 62
-    [[ "$7" == "--jq" ]] || exit 63
-    [[ "$8" == '.[] | select(.name == "ANDROID_RELEASE_CERT_SHA256") | [.name, .value] | @tsv' ]] \
+    [[ "$#" -eq 10 ]] || exit 60
+    [[ "$3" == "--env" && "$4" == "release" ]] || exit 61
+    [[ "$5" == "--repo" && "$6" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 62
+    [[ "$7" == "--json" && "$8" == "name,value" ]] || exit 63
+    [[ "$9" == "--jq" ]] || exit 64
+    [[ "${10}" == '.[] | select(.name == "ANDROID_RELEASE_CERT_SHA256") | [.name, .value] | @tsv' ]] \
       || exit 64
     [[ "${FAKE_VARIABLE_LIST_FAILURE:-false}" != true ]] || exit 65
+    [[ -f "${FAKE_SECRET_DIRECTORY}.environment" ]] || exit 66
     readonly variable_path="${FAKE_SECRET_DIRECTORY}.variables/ANDROID_RELEASE_CERT_SHA256"
     if [[ -f "$variable_path" ]]; then
       printf 'ANDROID_RELEASE_CERT_SHA256\t'
@@ -51,25 +69,31 @@ case "${1:-} ${2:-}" in
     fi
     ;;
   "variable set")
-    [[ "$#" -eq 5 ]] || exit 60
-    [[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 61
+    [[ "$#" -eq 7 ]] || exit 60
+    [[ "$4" == "--env" && "$5" == "release" ]] || exit 61
+    [[ "$6" == "--repo" && "$7" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 62
+    [[ -f "${FAKE_SECRET_DIRECTORY}.environment" ]] || exit 63
     mkdir -p "${FAKE_SECRET_DIRECTORY}.variables"
     cat >"${FAKE_SECRET_DIRECTORY}.variables/$3"
     ;;
   "secret list")
-    [[ "$#" -eq 8 ]] || exit 64
-    [[ "$3" == "--repo" && "$4" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 65
-    [[ "$5" == "--json" && "$6" == "name" ]] || exit 66
-    [[ "$7" == "--jq" && "$8" == ".[].name" ]] || exit 67
+    [[ "$#" -eq 10 ]] || exit 64
+    [[ "$3" == "--env" && "$4" == "release" ]] || exit 65
+    [[ "$5" == "--repo" && "$6" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 66
+    [[ "$7" == "--json" && "$8" == "name" ]] || exit 67
+    [[ "$9" == "--jq" && "${10}" == ".[].name" ]] || exit 68
+    [[ -f "${FAKE_SECRET_DIRECTORY}.environment" ]] || exit 69
     for secret_path in "$FAKE_SECRET_DIRECTORY"/*; do
       [[ -f "$secret_path" ]] || continue
       basename "$secret_path"
     done | sort
     ;;
   "secret set")
-    [[ "$#" -eq 5 ]] || exit 64
+    [[ "$#" -eq 7 ]] || exit 64
     readonly secret_name="$3"
-    [[ "$4" == "--repo" && "$5" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 65
+    [[ "$4" == "--env" && "$5" == "release" ]] || exit 65
+    [[ "$6" == "--repo" && "$7" == "$FAKE_EXPECTED_REPOSITORY" ]] || exit 66
+    [[ -f "${FAKE_SECRET_DIRECTORY}.environment" ]] || exit 67
     cat >"$FAKE_SECRET_DIRECTORY/$secret_name"
     ;;
   *)
@@ -103,6 +127,8 @@ output="$(
 )"
 
 [[ -f "$KEYSTORE_PATH" ]] || fail "release keystore was not created"
+[[ -f "$TEST_ROOT/secrets.environment" ]] \
+  || fail "release environment was not protected before configuring secrets"
 [[ "$(permission_bits "$TEST_ROOT/config")" == "$CONFIG_DIRECTORY_MODE" ]] \
   || fail "setup changed permissions of the existing keystore directory"
 [[ "$(permission_bits "$KEYSTORE_PATH")" == "-rw-------" ]] \

@@ -5,6 +5,7 @@ umask 077
 
 readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly GITHUB_REPOSITORY="${GURI_GITHUB_REPOSITORY:-o-kaisan/guri-launcher}"
+readonly RELEASE_ENVIRONMENT="release"
 readonly KEY_ALIAS="guri-launcher"
 readonly CERT_FINGERPRINT_VARIABLE="ANDROID_RELEASE_CERT_SHA256"
 readonly ALLOW_KEY_ROTATION="${GURI_ALLOW_RELEASE_KEY_ROTATION:-false}"
@@ -29,6 +30,10 @@ for command_name in keytool gh base64 tr; do
   command -v "$command_name" >/dev/null 2>&1 \
     || { echo "error: required command not found: $command_name" >&2; exit 1; }
 done
+if [[ ! "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "error: GURI_GITHUB_REPOSITORY must use the owner/repository form." >&2
+  exit 2
+fi
 
 case "$KEYSTORE_PATH_INPUT" in
   /*) readonly KEYSTORE_PATH_OPERAND="$KEYSTORE_PATH_INPUT" ;;
@@ -76,8 +81,34 @@ confirm_key_rotation() {
   rotation_confirmed=true
 }
 
+if ! release_reviewer_id="$(gh api user --jq .id)"; then
+  echo "error: could not identify the authenticated GitHub release reviewer." >&2
+  exit 1
+fi
+if [[ ! "$release_reviewer_id" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: GitHub returned an invalid release reviewer ID." >&2
+  exit 1
+fi
+readonly RELEASE_REVIEWER_ID="$release_reviewer_id"
+environment_payload="$(
+  printf \
+    '{"wait_timer":0,"prevent_self_review":false,"reviewers":[{"type":"User","id":%s}],"deployment_branch_policy":null}' \
+    "$RELEASE_REVIEWER_ID"
+)"
+if ! printf '%s' "$environment_payload" \
+  | gh api --method PUT \
+    "repos/$GITHUB_REPOSITORY/environments/$RELEASE_ENVIRONMENT" \
+    --input - >/dev/null; then
+  echo "error: could not configure the protected release environment." >&2
+  exit 1
+fi
+
 existing_secret_names="$(
-  gh secret list --repo "$GITHUB_REPOSITORY" --json name --jq '.[].name'
+  gh secret list \
+    --env "$RELEASE_ENVIRONMENT" \
+    --repo "$GITHUB_REPOSITORY" \
+    --json name \
+    --jq '.[].name'
 )"
 signing_secrets_exist=false
 for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
@@ -91,6 +122,7 @@ done
 
 if ! configured_fingerprint_record="$(
   gh variable list \
+    --env "$RELEASE_ENVIRONMENT" \
     --repo "$GITHUB_REPOSITORY" \
     --json name,value \
     --jq ".[] | select(.name == \"$CERT_FINGERPRINT_VARIABLE\") | [.name, .value] | @tsv"
@@ -216,21 +248,28 @@ if [[ "$rotation_confirmed" != true \
   fi
 fi
 
-base64 <"$KEYSTORE_PATH" | tr -d '\n' \
-  | gh secret set ANDROID_RELEASE_KEYSTORE_BASE64 --repo "$GITHUB_REPOSITORY"
-printf '%s' "$key_password" \
-  | gh secret set ANDROID_RELEASE_KEYSTORE_PASSWORD --repo "$GITHUB_REPOSITORY"
-printf '%s' "$KEY_ALIAS" \
-  | gh secret set ANDROID_RELEASE_KEY_ALIAS --repo "$GITHUB_REPOSITORY"
-printf '%s' "$key_password" \
-  | gh secret set ANDROID_RELEASE_KEY_PASSWORD --repo "$GITHUB_REPOSITORY"
 printf '%s' "$RELEASE_CERT_SHA256" \
-  | gh variable set "$CERT_FINGERPRINT_VARIABLE" --repo "$GITHUB_REPOSITORY"
+  | gh variable set "$CERT_FINGERPRINT_VARIABLE" \
+    --env "$RELEASE_ENVIRONMENT" --repo "$GITHUB_REPOSITORY"
+base64 <"$KEYSTORE_PATH" | tr -d '\n' \
+  | gh secret set ANDROID_RELEASE_KEYSTORE_BASE64 \
+    --env "$RELEASE_ENVIRONMENT" --repo "$GITHUB_REPOSITORY"
+printf '%s' "$key_password" \
+  | gh secret set ANDROID_RELEASE_KEYSTORE_PASSWORD \
+    --env "$RELEASE_ENVIRONMENT" --repo "$GITHUB_REPOSITORY"
+printf '%s' "$KEY_ALIAS" \
+  | gh secret set ANDROID_RELEASE_KEY_ALIAS \
+    --env "$RELEASE_ENVIRONMENT" --repo "$GITHUB_REPOSITORY"
+printf '%s' "$key_password" \
+  | gh secret set ANDROID_RELEASE_KEY_PASSWORD \
+    --env "$RELEASE_ENVIRONMENT" --repo "$GITHUB_REPOSITORY"
 
 key_password=''
 key_password_confirmation=''
 
-printf 'Signing secrets configured for %s.\n' "$GITHUB_REPOSITORY"
+printf 'Signing secrets configured for %s environment %s.\n' \
+  "$GITHUB_REPOSITORY" "$RELEASE_ENVIRONMENT"
+printf 'Release runs require approval from GitHub user ID %s.\n' "$RELEASE_REVIEWER_ID"
 printf 'Release certificate SHA-256: %s\n' "$RELEASE_CERT_SHA256"
 printf 'Back up the keystore at %s and its password; both are required for future updates.\n' \
   "$KEYSTORE_PATH"

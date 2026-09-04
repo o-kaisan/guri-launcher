@@ -17,6 +17,8 @@ jobs:
     name: Build signed APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment:
+      name: release
     outputs:
       apk_name: ${{ steps.metadata.outputs.apk_name }}
       commit_sha: ${{ steps.release_commit.outputs.commit_sha }}
@@ -64,6 +66,7 @@ jobs:
           ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
           ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
         run: |
           missing=()
           for name in \
@@ -77,6 +80,15 @@ jobs:
           done
           if ((${#missing[@]} > 0)); then
             printf 'error: missing GitHub Actions secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+          expected_cert_sha256="$(
+            printf '%s' "$EXPECTED_CERT_SHA256" \
+              | tr -d ':[:space:]' \
+              | tr '[:lower:]' '[:upper:]'
+          )"
+          if [[ ! "$expected_cert_sha256" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "error: missing or invalid ANDROID_RELEASE_CERT_SHA256 environment variable." >&2
             exit 1
           fi
 
@@ -105,6 +117,7 @@ jobs:
           APK_NAME: ${{ steps.metadata.outputs.apk_name }}
           EXPECTED_VERSION_NAME: ${{ steps.metadata.outputs.version_name }}
           EXPECTED_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+          EXPECTED_CERT_SHA256: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
         run: |
           source_apk="app/build/outputs/apk/release/app-release.apk"
           test -f "$source_apk"
@@ -127,7 +140,8 @@ jobs:
             echo "error: apksigner was not found in the Android SDK." >&2
             exit 1
           fi
-          "$apksigner" verify --verbose --print-certs "$source_apk"
+          APKSIGNER="$apksigner" ./scripts/release/verify-apk-signer.sh \
+            "$source_apk" "$EXPECTED_CERT_SHA256"
           mkdir -p dist
           cp "$source_apk" "dist/$APK_NAME"
 
