@@ -86,5 +86,9 @@ if release_details="$(
 fi
 
 verify_tag
-gh release create "$TAG" "$APK_PATH" \
+gh release create "$TAG" --draft \
   --generate-notes --verify-tag --title "$TAG"
+verify_tag
+gh release upload "$TAG" "$APK_PATH" --clobber
+verify_tag
+gh release edit "$TAG" --draft=false

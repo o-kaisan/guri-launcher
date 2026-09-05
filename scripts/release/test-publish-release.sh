@@ -59,7 +59,12 @@ case "${1:-} ${2:-}" in
   "release create")
     [[ "$#" -eq 8 ]] || exit 72
     [[ "$3" == "v1.2.3" ]] || exit 73
-    [[ -f "$4" && "$(basename "$4")" == "guri-launcher-v1.2.3.apk" ]] || exit 74
+    if [[ "$4" == "--draft" ]]; then
+      create_draft=true
+    else
+      [[ -f "$4" && "$(basename "$4")" == "guri-launcher-v1.2.3.apk" ]] || exit 74
+      create_draft=false
+    fi
     [[ "$5" == "--generate-notes" && "$6" == "--verify-tag" ]] || exit 75
     [[ "$7" == "--title" && "$8" == "v1.2.3" ]] || exit 76
     [[ "$(<"$FAKE_RELEASE_STATE_FILE")" == missing ]] || exit 78
@@ -67,13 +72,21 @@ case "${1:-} ${2:-}" in
       printf 'draft\n' >"$FAKE_RELEASE_STATE_FILE"
       exit 79
     fi
-    printf 'guri-launcher-v1.2.3.apk\n' >"$FAKE_RELEASE_ASSET_FILE"
-    printf 'published\n' >"$FAKE_RELEASE_STATE_FILE"
+    if [[ "$create_draft" == true ]]; then
+      printf 'draft\n' >"$FAKE_RELEASE_STATE_FILE"
+    else
+      printf 'guri-launcher-v1.2.3.apk\n' >"$FAKE_RELEASE_ASSET_FILE"
+      printf 'published\n' >"$FAKE_RELEASE_STATE_FILE"
+    fi
     ;;
   "api repos/o-kaisan/guri-launcher/commits/v1.2.3")
     [[ "$#" -eq 4 ]] || exit 80
     [[ "$3" == "--jq" && "$4" == ".sha" ]] || exit 81
-    printf '%s\n' "$FAKE_CURRENT_TAG_COMMIT"
+    if [[ "${FAKE_MOVE_AFTER_UPLOAD:-false}" == true && -f "$FAKE_RELEASE_ASSET_FILE" ]]; then
+      printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+    else
+      printf '%s\n' "$FAKE_CURRENT_TAG_COMMIT"
+    fi
     ;;
   *) exit 82 ;;
 esac
@@ -97,13 +110,26 @@ run_publish() {
 
 [[ -x "$SCRIPT" ]] || fail "$SCRIPT is missing or is not executable"
 
+# Moving the tag during the initial asset upload must leave the release unpublished.
+: >"$FAKE_GH_LOG"
+printf 'missing\n' >"$FAKE_RELEASE_STATE_FILE"
+set +e
+FAKE_MOVE_AFTER_UPLOAD=true run_publish >/dev/null 2>&1
+moved_during_upload_status=$?
+set -e
+[[ "$moved_during_upload_status" -eq 2 ]] \
+  || fail "tag moved during initial upload was published"
+[[ "$(<"$FAKE_RELEASE_STATE_FILE")" == draft ]] \
+  || fail "tag moved during upload did not remain a draft"
+rm -f -- "$FAKE_RELEASE_ASSET_FILE"
+
 # A new tag creates and publishes one release with the signed APK.
 : >"$FAKE_GH_LOG"
 printf 'missing\n' >"$FAKE_RELEASE_STATE_FILE"
 run_publish >/dev/null
 [[ "$(<"$FAKE_RELEASE_STATE_FILE")" == published ]] \
   || fail "new release was not published"
-[[ "$(command_count "release create v1.2.3 $APK_PATH --generate-notes --verify-tag --title v1.2.3")" -eq 1 ]] \
+[[ "$(command_count "release create v1.2.3 --draft --generate-notes --verify-tag --title v1.2.3")" -eq 1 ]] \
   || fail "new release was not created with the expected arguments"
 
 # A failed create can leave a draft; the next run must upload and publish it.
@@ -125,7 +151,7 @@ run_publish >/dev/null
   || fail "draft recovery did not replace the APK asset"
 [[ "$(command_count "release edit v1.2.3 --draft=false")" -eq 1 ]] \
   || fail "draft recovery did not publish the release"
-[[ "$(command_count "release create v1.2.3 $APK_PATH --generate-notes --verify-tag --title v1.2.3")" -eq 1 ]] \
+[[ "$(command_count "release create v1.2.3 --draft --generate-notes --verify-tag --title v1.2.3")" -eq 1 ]] \
   || fail "draft recovery tried to create a second release"
 
 # A moved tag must stop draft recovery before the draft or asset is changed.
@@ -153,7 +179,7 @@ printf 'published\n' >"$FAKE_RELEASE_STATE_FILE"
 run_publish >/dev/null
 [[ "$(command_count "release upload v1.2.3 $APK_PATH --clobber")" -eq 0 ]] \
   || fail "published release was modified on rerun"
-[[ "$(command_count "release create v1.2.3 $APK_PATH --generate-notes --verify-tag --title v1.2.3")" -eq 0 ]] \
+[[ "$(command_count "release create v1.2.3 --draft --generate-notes --verify-tag --title v1.2.3")" -eq 0 ]] \
   || fail "published release was recreated on rerun"
 
 # A published release without the expected APK must fail instead of being hidden.

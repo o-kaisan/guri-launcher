@@ -81,35 +81,44 @@ confirm_key_rotation() {
   rotation_confirmed=true
 }
 
-if ! release_reviewer_id="$(gh api user --jq .id)"; then
-  echo "error: could not identify the authenticated GitHub release reviewer." >&2
+# Inspect without changing administrator-managed environment protections.
+if ! existing_reviewer_count="$(
+  gh api "repos/$GITHUB_REPOSITORY/environments" --paginate \
+    --jq '.environments[] | select(.name == "release") | [.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length'
+)"; then
+  echo "error: could not inspect the release environment protections." >&2
   exit 1
 fi
-if [[ ! "$release_reviewer_id" =~ ^[1-9][0-9]*$ ]]; then
-  echo "error: GitHub returned an invalid release reviewer ID." >&2
-  exit 1
-fi
-readonly RELEASE_REVIEWER_ID="$release_reviewer_id"
-environment_payload="$(
-  printf \
-    '{"wait_timer":0,"prevent_self_review":false,"reviewers":[{"type":"User","id":%s}],"deployment_branch_policy":null}' \
-    "$RELEASE_REVIEWER_ID"
-)"
-if ! printf '%s' "$environment_payload" \
-  | gh api --method PUT \
-    "repos/$GITHUB_REPOSITORY/environments/$RELEASE_ENVIRONMENT" \
-    --input - >/dev/null; then
-  echo "error: could not configure the protected release environment." >&2
-  exit 1
+environment_exists=false
+if [[ -n "$existing_reviewer_count" ]]; then
+  environment_exists=true
+  if [[ ! "$existing_reviewer_count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: the existing release environment must have required reviewers; configure them in GitHub before retrying." >&2
+    exit 2
+  fi
 fi
 
-existing_secret_names="$(
-  gh secret list \
-    --env "$RELEASE_ENVIRONMENT" \
-    --repo "$GITHUB_REPOSITORY" \
-    --json name \
-    --jq '.[].name'
-)"
+existing_secret_names=''
+configured_fingerprint_record=''
+if [[ "$environment_exists" == true ]]; then
+  existing_secret_names="$(
+    gh secret list \
+      --env "$RELEASE_ENVIRONMENT" \
+      --repo "$GITHUB_REPOSITORY" \
+      --json name \
+      --jq '.[].name'
+  )"
+  if ! configured_fingerprint_record="$(
+    gh variable list \
+      --env "$RELEASE_ENVIRONMENT" \
+      --repo "$GITHUB_REPOSITORY" \
+      --json name,value \
+      --jq ".[] | select(.name == \"$CERT_FINGERPRINT_VARIABLE\") | [.name, .value] | @tsv"
+  )"; then
+    echo "error: could not inspect the configured release certificate fingerprint." >&2
+    exit 1
+  fi
+fi
 signing_secrets_exist=false
 for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
   while IFS= read -r existing_secret_name; do
@@ -120,16 +129,6 @@ for signing_secret_name in "${SIGNING_SECRET_NAMES[@]}"; do
   done <<<"$existing_secret_names"
 done
 
-if ! configured_fingerprint_record="$(
-  gh variable list \
-    --env "$RELEASE_ENVIRONMENT" \
-    --repo "$GITHUB_REPOSITORY" \
-    --json name,value \
-    --jq ".[] | select(.name == \"$CERT_FINGERPRINT_VARIABLE\") | [.name, .value] | @tsv"
-)"; then
-  echo "error: could not inspect the configured release certificate fingerprint." >&2
-  exit 1
-fi
 configured_cert_fingerprint_exists=false
 configured_cert_sha256=''
 if [[ -n "$configured_fingerprint_record" ]]; then
@@ -248,6 +247,32 @@ if [[ "$rotation_confirmed" != true \
   fi
 fi
 
+# Only create a missing environment once the password and signer are validated.
+if [[ "$environment_exists" != true ]]; then
+  if ! release_reviewer_id="$(gh api user --jq .id)"; then
+    echo "error: could not identify the authenticated GitHub release reviewer." >&2
+    exit 1
+  fi
+  if [[ ! "$release_reviewer_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: GitHub returned an invalid release reviewer ID." >&2
+    exit 1
+  fi
+  readonly RELEASE_REVIEWER_ID="$release_reviewer_id"
+  environment_payload="$(
+    printf \
+      '{"wait_timer":0,"prevent_self_review":false,"reviewers":[{"type":"User","id":%s}],"deployment_branch_policy":null}' \
+      "$RELEASE_REVIEWER_ID"
+  )"
+  if ! printf '%s' "$environment_payload" \
+    | gh api --method PUT \
+      "repos/$GITHUB_REPOSITORY/environments/$RELEASE_ENVIRONMENT" \
+      --input - >/dev/null; then
+    echo "error: could not configure the protected release environment." >&2
+    exit 1
+  fi
+
+fi
+
 printf '%s' "$RELEASE_CERT_SHA256" \
   | gh variable set "$CERT_FINGERPRINT_VARIABLE" \
     --env "$RELEASE_ENVIRONMENT" --repo "$GITHUB_REPOSITORY"
@@ -269,7 +294,7 @@ key_password_confirmation=''
 
 printf 'Signing secrets configured for %s environment %s.\n' \
   "$GITHUB_REPOSITORY" "$RELEASE_ENVIRONMENT"
-printf 'Release runs require approval from GitHub user ID %s.\n' "$RELEASE_REVIEWER_ID"
+printf 'Release runs require approval from the configured environment reviewers.\n'
 printf 'Release certificate SHA-256: %s\n' "$RELEASE_CERT_SHA256"
 printf 'Back up the keystore at %s and its password; both are required for future updates.\n' \
   "$KEYSTORE_PATH"

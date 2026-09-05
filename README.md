@@ -44,6 +44,8 @@ make release-signing-setup
 - `ANDROID_RELEASE_KEY_ALIAS`
 - `ANDROID_RELEASE_KEY_PASSWORD`
 
+既存の `release` Environment は承認者、待機時間、自己承認禁止、ブランチ制限を変更せず再利用します。必須承認者が未設定の場合は停止するため、GitHub側で設定してから再実行してください。新規Environmentはパスワードと署名鍵の検証後に作成します。
+
 さらに、秘密情報ではない公開証明書の指紋をEnvironment Variable `ANDROID_RELEASE_CERT_SHA256` に登録します。再実行時はこの指紋をローカル鍵と照合し、異なる署名鍵によるSecretsの置換を防ぎます。Release Workflowも完成したAPKの署名指紋をこの値と照合し、不一致なら公開しません。
 
 リリース鍵とパスワードを失うと、インストール済みアプリを上書き更新できません。リポジトリには追加せず、両方を安全な別の場所にもバックアップしてください。Secrets登録だけをやり直す場合は、同じ保存先とパスワードでもう一度コマンドを実行します。保存先を変更する場合は、リポジトリ外のパスを指定します。

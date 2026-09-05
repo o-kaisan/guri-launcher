@@ -35,6 +35,17 @@ cat >"$TEST_ROOT/bin/gh" <<'EOF'
 set -euo pipefail
 
 case "${1:-} ${2:-}" in
+  "api repos/$FAKE_EXPECTED_REPOSITORY/environments")
+    [[ "$#" -eq 5 && "$3" == "--paginate" && "$4" == "--jq" ]] || exit 49
+    [[ "$5" == '.environments[] | select(.name == "release") | [.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' ]] || exit 49
+    [[ "${FAKE_ENV_LOOKUP_FAILURE:-false}" != true ]] || exit 49
+    if [[ "${FAKE_ENV_MISSING:-false}" != true ]]; then
+      if [[ ! -f "${FAKE_SECRET_DIRECTORY}.environment" ]]; then
+        printf 'existing protection settings\n' >"${FAKE_SECRET_DIRECTORY}.environment"
+      fi
+      printf '%s\n' "${FAKE_REVIEWER_COUNT:-1}"
+    fi
+    ;;
   "api user")
     [[ "$#" -eq 4 ]] || exit 50
     [[ "$3" == "--jq" && "$4" == ".id" ]] || exit 51
@@ -121,6 +132,7 @@ output="$(
     | PATH="$TEST_ROOT/bin:$PATH" \
       FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
       FAKE_SECRET_DIRECTORY="$TEST_ROOT/secrets" \
+      FAKE_ENV_MISSING=true \
       GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
       GURI_RELEASE_KEYSTORE_PATH="$KEYSTORE_PATH" \
       "$SCRIPT"
@@ -155,6 +167,56 @@ cmp -s "$KEYSTORE_PATH" "$TEST_ROOT/uploaded.keystore" \
 [[ "$(<"$TEST_ROOT/secrets.variables/ANDROID_RELEASE_CERT_SHA256")" \
   =~ ^[0-9A-F]{64}$ ]] \
   || fail "persisted release certificate fingerprint is invalid"
+
+# Reruns and rejected credentials must never rewrite existing environment protections.
+readonly PROTECTED_SETTINGS='{"wait_timer":30,"prevent_self_review":true,"reviewers":[{"type":"Team","id":42}],"deployment_branch_policy":{"protected_branches":true,"custom_branch_policies":false}}'
+for credential_case in valid invalid; do
+  printf '%s\n' "$PROTECTED_SETTINGS" >"$TEST_ROOT/secrets.environment"
+  candidate_password="$PASSWORD"
+  [[ "$credential_case" != invalid ]] || candidate_password='invalid password for this key'
+  set +e
+  printf '%s\n%s\n' "$candidate_password" "$candidate_password" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/secrets" \
+      GURI_RELEASE_KEYSTORE_PATH="$KEYSTORE_PATH" \
+      "$SCRIPT" >"$TEST_ROOT/protection-result" 2>&1
+  protection_status=$?
+  set -e
+  [[ "$(<"$TEST_ROOT/secrets.environment")" == "$PROTECTED_SETTINGS" ]] \
+    || fail "$credential_case credentials overwrote existing environment protections"
+  if [[ "$credential_case" == valid ]]; then
+    [[ "$protection_status" -eq 0 ]] || fail "protected environment could not be reused"
+  else
+    [[ "$protection_status" -eq 2 ]] || fail "invalid keystore password was accepted"
+  fi
+done
+
+# Lookup failures and environments without reviewers must reject secret writes.
+for environment_case in lookup_failure unprotected; do
+  printf '%s\n' "$PROTECTED_SETTINGS" >"$TEST_ROOT/secrets.environment"
+  lookup_failure=false
+  reviewer_count=1
+  if [[ "$environment_case" == lookup_failure ]]; then
+    lookup_failure=true
+  else
+    reviewer_count=0
+  fi
+  set +e
+  printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" \
+    | PATH="$TEST_ROOT/bin:$PATH" \
+      FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
+      FAKE_SECRET_DIRECTORY="$TEST_ROOT/secrets" \
+      FAKE_ENV_LOOKUP_FAILURE="$lookup_failure" \
+      FAKE_REVIEWER_COUNT="$reviewer_count" \
+      GURI_RELEASE_KEYSTORE_PATH="$KEYSTORE_PATH" \
+      "$SCRIPT" >"$TEST_ROOT/protection-result" 2>&1
+  protection_status=$?
+  set -e
+  [[ "$protection_status" -ne 0 ]] || fail "$environment_case allowed signing setup"
+  [[ "$(<"$TEST_ROOT/secrets.environment")" == "$PROTECTED_SETTINGS" ]] \
+    || fail "$environment_case changed existing protections"
+done
 
 # Fingerprint lookup failures must stop before any signing material changes.
 mkdir -p "$TEST_ROOT/fingerprint-lookup-secrets" "$TEST_ROOT/fingerprint-lookup-config"
@@ -428,6 +490,7 @@ weak_output="$(
     | PATH="$TEST_ROOT/bin:$PATH" \
       FAKE_EXPECTED_REPOSITORY="o-kaisan/guri-launcher" \
       FAKE_SECRET_DIRECTORY="$TEST_ROOT/weak-secrets" \
+      FAKE_ENV_MISSING=true \
       GURI_GITHUB_REPOSITORY="o-kaisan/guri-launcher" \
       GURI_RELEASE_KEYSTORE_PATH="$TEST_ROOT/weak-config/release.keystore" \
       "$SCRIPT" 2>&1
@@ -435,6 +498,8 @@ weak_output="$(
 weak_status=$?
 set -e
 
+[[ ! -e "$TEST_ROOT/weak-secrets.environment" ]] \
+  || fail "weak password created a remote environment"
 [[ "$weak_status" -eq 2 ]] \
   || fail "weak password returned status $weak_status instead of 2"
 [[ "$weak_output" == *"at least 16 characters"* ]] \
