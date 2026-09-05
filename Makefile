@@ -2,6 +2,7 @@ SHELL := /bin/bash
 
 GRADLEW := ./gradlew
 ANDROID_SCRIPTS := ./scripts/android
+RELEASE_SCRIPTS := ./scripts/release
 ANDROID_SDK_ROOT ?= $(if $(ANDROID_HOME),$(ANDROID_HOME),$(HOME)/Android/Sdk)
 
 export ANDROID_SDK_ROOT
@@ -13,7 +14,8 @@ export PATH := $(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$
 .PHONY: help test lint assemble-debug check \
 	android-sdk android-emulator-start android-emulator-install \
 	android-emulator-devices android-emulator-stop android-emulator-test \
-	android-container-build android-container-run android-container-down
+	android-container-build android-container-run android-container-down \
+	release-test release-signing-setup
 
 help: ## 利用できるコマンドを表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -27,7 +29,17 @@ lint: ## Android lint を実行する
 assemble-debug: ## debug APK をビルドする
 	$(GRADLEW) assembleDebug
 
-check: test lint assemble-debug android-emulator-test ## unit test、lint、build、emulator script test を実行する
+check: test lint assemble-debug android-emulator-test release-test ## unit test、lint、build、script test を実行する
+
+release-test: ## Release用scriptのテストを実行する
+	$(RELEASE_SCRIPTS)/test-release-metadata.sh
+	$(RELEASE_SCRIPTS)/test-configure-signing.sh
+	$(RELEASE_SCRIPTS)/test-verify-release-tag.sh
+	$(RELEASE_SCRIPTS)/test-publish-release.sh
+	$(RELEASE_SCRIPTS)/test-verify-apk-signer.sh
+
+release-signing-setup: ## Release署名鍵と保護Environmentを設定する
+	$(RELEASE_SCRIPTS)/configure-signing.sh
 
 android-sdk: ## Android 17 emulator 用 Android SDK を導入する
 	$(ANDROID_SCRIPTS)/setup-sdk.sh

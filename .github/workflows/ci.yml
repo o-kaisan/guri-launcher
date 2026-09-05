@@ -35,11 +35,65 @@ jobs:
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
 
+      - name: Test release scripts
+        run: make release-test
+
       - name: Run unit tests
         run: make test
 
       - name: Run Android lint
         run: make lint
+
+      - name: Verify signed release build
+        env:
+          GURI_RELEASE_SIGNING_REQUIRED: "true"
+          ANDROID_RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/ci-release.keystore
+          ANDROID_RELEASE_KEY_ALIAS: guri-launcher-ci
+        run: |
+          ci_password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+          export ANDROID_RELEASE_KEYSTORE_PASSWORD="$ci_password"
+          export ANDROID_RELEASE_KEY_PASSWORD="$ci_password"
+          trap 'rm -f -- "$ANDROID_RELEASE_KEYSTORE_FILE"' EXIT
+
+          keytool -genkeypair -noprompt \
+            -alias "$ANDROID_RELEASE_KEY_ALIAS" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 1 \
+            -dname "CN=guri-launcher CI" \
+            -keystore "$ANDROID_RELEASE_KEYSTORE_FILE" \
+            -storetype PKCS12 \
+            -storepass "$ci_password" \
+            -keypass "$ci_password" >/dev/null
+
+          ./gradlew assembleRelease \
+            -PguriVersionName=0.1.0 \
+            -PguriVersionCode=1000
+
+          release_apk="app/build/outputs/apk/release/app-release.apk"
+          test "$(apkanalyzer manifest version-name "$release_apk")" = "0.1.0"
+          test "$(apkanalyzer manifest version-code "$release_apk")" = "1000"
+          apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner \
+            -print | sort -V | tail -n 1)"
+          test -n "$apksigner"
+          keytool_details="$(
+            LC_ALL=C keytool \
+              -J-Duser.language=en \
+              -J-Duser.country=US \
+              -list -v \
+              -alias "$ANDROID_RELEASE_KEY_ALIAS" \
+              -keystore "$ANDROID_RELEASE_KEYSTORE_FILE" \
+              -storepass "$ci_password"
+          )"
+          ci_cert_sha256=''
+          while IFS= read -r keytool_line; do
+            if [[ "$keytool_line" =~ SHA256:[[:space:]]*([0-9A-Fa-f:]+) ]]; then
+              ci_cert_sha256="${BASH_REMATCH[1]}"
+              break
+            fi
+          done <<<"$keytool_details"
+          APKSIGNER="$apksigner" ./scripts/release/verify-apk-signer.sh \
+            "$release_apk" "$ci_cert_sha256"
 
       - name: Build debug APK
         run: make assemble-debug
