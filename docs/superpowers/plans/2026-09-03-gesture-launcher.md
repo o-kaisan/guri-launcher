@@ -94,7 +94,7 @@ Wave 内の項目は独立しているため並行実装できる。次の Wave 
 
 **Produces:** `HomeRoleRequester.request(activity): HomeRoleRequestResult`; no Domain dependency.
 
-- [ ] **Step 1: Write the API-level decision test.**
+- [x] **Step 1: Write the API-level decision test.**
 
 ```kotlin
 @Test fun `API 29 uses role manager`() {
@@ -106,11 +106,11 @@ Wave 内の項目は独立しているため並行実装できる。次の Wave 
 }
 ```
 
-- [ ] **Step 2: Run the focused test and confirm it fails because the decision API does not exist.**
+- [x] **Step 2: Run the focused test and confirm it fails because the decision API does not exist.**
 
 Run: `./gradlew :app:testDebugUnitTest --tests '*HomeRoleDecisionTest'`
 
-- [ ] **Step 3: Add separate LAUNCHER and HOME intent filters.**
+- [x] **Step 3: Add separate LAUNCHER and HOME intent filters.**
 
 ```xml
 <intent-filter>
@@ -124,13 +124,13 @@ Run: `./gradlew :app:testDebugUnitTest --tests '*HomeRoleDecisionTest'`
 </intent-filter>
 ```
 
-- [ ] **Step 4: Implement `HomeRoleRoute`, the pure decision function, and `HomeRoleRequester`.** Return `AlreadyHome`, `RequestStarted`, or `SettingsOpened`; never swallow `ActivityNotFoundException`.
-- [ ] **Step 5: Add a settings action in `MainActivity` that calls the requester only after explicit user input.** Do not prompt every time HOME opens.
-- [ ] **Step 6: Run focused and full unit tests, then lint and assemble.**
+- [x] **Step 4: Implement `HomeRoleRoute`, the pure decision function, and `HomeRoleRequester`.** Return `AlreadyHome`, `RequestStarted`, or `SettingsOpened`; never swallow `ActivityNotFoundException`.
+- [x] **Step 5: Add a settings action in `MainActivity` that calls the requester only after explicit user input.** Do not prompt every time HOME opens.
+- [x] **Step 6: Run focused and full unit tests, then lint and assemble.**
 
 Run: `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add app/src/main/AndroidManifest.xml app/src/main/java app/src/test/java

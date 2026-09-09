@@ -1,6 +1,8 @@
 # guri-launcher
 
-Android 向けランチャーアプリの開発基盤です。現在は Kotlin と Jetpack Compose で、アプリ名を表示する最小構成を提供しています。
+Android 向けランチャーアプリです。Kotlin と Jetpack Compose を使い、画面の「デフォルトのホームに設定」から OS 標準 UI で HOME アプリに設定できます。アプリアイコンからの起動にも対応しています。ジェスチャーやアプリ配置は今後実装します。
+
+HOME 設定の動作と検証手順は [デフォルト HOME の検証](docs/testing/default-home.md) を参照してください。
 
 ## 必要な環境
 
