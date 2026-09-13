@@ -1,17 +1,17 @@
 # guri-launcher
 
-Android 向けランチャーアプリです。Kotlin と Jetpack Compose を使い、画面の「デフォルトのホームに設定」から OS 標準 UI で HOME アプリに設定できます。アプリアイコンからの起動にも対応しています。ジェスチャーやアプリ配置は今後実装します。
+Flutter で実装した Android 向けランチャーアプリです。画面の「デフォルトのホームに設定」から OS 標準 UI で HOME アプリに設定できます。Android 固有処理は MethodChannel の infrastructure 実装に限定しています。
 
 HOME 設定の動作と検証手順は [デフォルト HOME の検証](docs/testing/default-home.md) を参照してください。
 
 ## 必要な環境
 
-- JDK 25
-- Android Studio（または Android SDK。compileSdk 35、Android 17 emulator）
+- Flutter stable
+- Android Studio（または Android SDK）
 
 ## ローカルでの確認
 
-Android Studio でリポジトリのルートを開くか、SDK の場所を `local.properties` の `sdk.dir` または `ANDROID_HOME` に設定して実行します。
+Flutter と Android SDK を設定して実行します。
 
 ```shell
 make test
@@ -21,7 +21,7 @@ make assemble-debug
 
 3 つの確認と Android emulator script のテストをまとめて実行する場合は `make check` を使います。利用可能なコマンドは `make help` で確認できます。
 
-Debug APK は `app/build/outputs/apk/debug/app-debug.apk` に生成されます。Pull Request と `main` への push では同じ確認を CI で実行します。
+Debug APK は `build/app/outputs/flutter-apk/app-debug.apk` に生成されます。Pull Request と `main` への push では同じ確認を CI で実行します。
 
 ## スマートフォンへ配布するAPK
 
@@ -94,7 +94,7 @@ AVD の作成と headless 起動は次のコマンドで行います。
 make android-emulator-start
 ```
 
-`guri_api_37` が存在しない場合だけPixel 6プロファイルとAndroid 17 Google APIs x86_64 imageで作成します。ローカルのheadless起動はGPU off、`-no-window`、snapshot無効を使用します。Compose GUI起動はXvfb内でwindowを表示し、Mesaのhost rendererで描画します。既定の `EMULATOR_ACCELERATION=auto` はKVMが利用できれば `-accel on`、それ以外は `-accel off` を選びます。既定では起動完了を最大300秒待ち、`BOOT_TIMEOUT_SECONDS` で変更できます。
+`guri_api_37` が存在しない場合だけPixel 6プロファイルとAndroid 17 Google APIs x86_64 imageで作成します。ローカルのheadless起動はGPU off、`-no-window`、snapshot無効を使用します。コンテナのGUI起動はXvfb内でwindowを表示し、Mesaのhost rendererで描画します。既定の `EMULATOR_ACCELERATION=auto` はKVMが利用できれば `-accel on`、それ以外は `-accel off` を選びます。既定では起動完了を最大300秒待ち、`BOOT_TIMEOUT_SECONDS` で変更できます。
 
 Test Android Apps プラグインからは、起動後に通常どおり `adb -e` を使えます。debug APK の build、置換 install、`MainActivity` 起動はまとめて確認できます。
 
@@ -114,7 +114,7 @@ make android-emulator-stop
 
 KVM 対応 Linux ホストでは、Android 17（API 37.0）emulatorをブラウザーで操作できます。1コマンドでimage build、emulator起動待機、APK build、install、`MainActivity` 起動まで行います。Docker image はJDK 25、compileSdk 35、Build Tools 36、Android 17 Google APIs x86_64 system image、Xvfb、noVNCを含みます。秘密情報やGitHub tokenはbuild argやimage layerへ渡さないでください。
 
-### Compose image を build する
+### emulator image を build する
 
 ```shell
 make android-container-build
@@ -129,7 +129,7 @@ Docker build は `sdkmanager --licenses` へ非対話で同意したうえで SD
 
 ### 1コマンドで起動・表示する
 
-Composeの `android-emulator` serviceは `/dev/kvm` を渡し、専用AVD `guri_docker_api_37` を作成します。APKをbuildしてからXvfb上に実際のemulator windowを起動し、noVNCで配信します。healthcheckがAndroid bootとnoVNCの両方を確認した後、APKをinstallして起動します。
+Docker Composeの `android-emulator` serviceは `/dev/kvm` を渡し、専用AVD `guri_docker_api_37` を作成します。APKをbuildしてからXvfb上に実際のemulator windowを起動し、noVNCで配信します。healthcheckがAndroid bootとnoVNCの両方を確認した後、APKをinstallして起動します。
 
 ```shell
 make android-container-run
@@ -157,7 +157,7 @@ docker compose exec android-emulator \
   bash -lc './scripts/android/install-and-launch.sh'
 ```
 
-個別操作が必要なら、同じ prefix の後ろで `adb devices`、`adb shell`、`./gradlew test` などを実行します。ホスト側の `adb` ではなく、必ずコンテナ内の `adb` を使用してください。
+個別操作が必要なら、同じ prefix の後ろで `adb devices`、`adb shell`、`flutter test` などを実行します。ホスト側の `adb` ではなく、必ずコンテナ内の `adb` を使用してください。
 software emulation で起動した場合は、`docker compose --profile software exec android-emulator-software` を prefix に使います。
 
 ### 停止・削除する

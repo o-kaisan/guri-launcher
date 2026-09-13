@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-GRADLEW := ./gradlew
+FLUTTER := flutter
 ANDROID_SCRIPTS := ./scripts/android
 RELEASE_SCRIPTS := ./scripts/release
 ANDROID_SDK_ROOT ?= $(if $(ANDROID_HOME),$(ANDROID_HOME),$(HOME)/Android/Sdk)
@@ -21,13 +21,13 @@ help: ## 利用できるコマンドを表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 test: ## unit test を実行する
-	$(GRADLEW) test
+	$(FLUTTER) test
 
-lint: ## Android lint を実行する
-	$(GRADLEW) lint
+lint: ## Dart 静的解析を実行する
+	$(FLUTTER) analyze
 
 assemble-debug: ## debug APK をビルドする
-	$(GRADLEW) assembleDebug
+	$(FLUTTER) build apk --debug
 
 check: test lint assemble-debug android-emulator-test release-test ## unit test、lint、build、script test を実行する
 
@@ -59,7 +59,7 @@ android-emulator-stop: ## Android 17 emulator を停止する
 android-emulator-test: ## Android emulator script のテストを実行する
 	$(ANDROID_SCRIPTS)/test-scripts.sh
 
-android-container-build: ## Android emulator の Compose image を build する
+android-container-build: ## Android emulator の Docker image を build する
 	docker compose build android-emulator
 
 android-container-run: ## Android 17 GUI emulator を起動しアプリを導入する

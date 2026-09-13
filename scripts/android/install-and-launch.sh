@@ -2,12 +2,12 @@
 set -euo pipefail
 
 readonly PACKAGE_NAME="io.github.okaisan.gurilauncher"
-readonly ACTIVITY_NAME=".presentation.MainActivity"
-readonly APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+readonly ACTIVITY_NAME=".MainActivity"
+readonly APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
 readonly ANDROID_SERVICE_TIMEOUT_SECONDS=180
 
 case "${SKIP_ANDROID_BUILD:-false}" in
-  false) ./gradlew assembleDebug ;;
+  false) flutter build apk --debug ;;
   true) ;;
   *) echo "error: SKIP_ANDROID_BUILD must be 'true' or 'false'." >&2; exit 2 ;;
 esac

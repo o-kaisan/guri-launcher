@@ -26,7 +26,7 @@ cd "$REPOSITORY_ROOT"
 docker compose "${compose_args[@]}" down --remove-orphans
 docker compose "${compose_args[@]}" build "$SERVICE"
 docker compose "${compose_args[@]}" run --rm --no-deps -T "$SERVICE" \
-  bash -lc 'ANDROID_USER_HOME=/root/.android-build ./gradlew assembleDebug'
+  bash -lc 'ANDROID_USER_HOME=/root/.android-build flutter build apk --debug'
 docker compose "${compose_args[@]}" up --detach --wait --remove-orphans --no-build "$SERVICE"
 docker compose "${compose_args[@]}" exec -T "$SERVICE" \
   bash -lc 'SKIP_ANDROID_BUILD=true ./scripts/android/install-and-launch.sh'

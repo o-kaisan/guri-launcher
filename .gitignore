@@ -33,14 +33,18 @@ google-services.json
 # Android Profiling
 *.hprof
 
-# Gradle and Android Studio
-.gradle/
+# Flutter and Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 build/
-**/build/
-.idea/
-*.iml
-local.properties
+coverage/
 
-# Signing material
+# Android local state
+android/.gradle/
+android/local.properties
+android/**/key.properties
 *.jks
 *.keystore

@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">guri-launcher</string>
-    <string name="set_default_home">デフォルトのホームに設定</string>
-    <string name="home_status_not_selected">デフォルトのホームに設定されていません</string>
-    <string name="home_status_selected">デフォルトのホームに設定済みです</string>
-    <string name="home_status_choose_in_system_ui">システム画面でホームアプリを選択してください</string>
-    <string name="home_status_unavailable">この端末ではホームアプリを変更できません</string>
-    <string name="home_status_failed">ホーム設定画面を開けませんでした</string>
-</resources>

@@ -1,5 +1,7 @@
 # Gesture Launcher MVP Implementation Plan
 
+> 2026-09-12 / #35: この文書のKotlin/Compose固有箇所は旧実装計画です。Flutter実装では技術詳細を読み替えてください。今後の技術方針・受入条件は[更新済みEpic #16](https://github.com/o-kaisan/guri-launcher/issues/16)と各子Issueを優先し、クラス・依存・テストの詳細は着手時に必要な範囲で再計画します。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** guri-launcher を Android の HOME アプリとして動作させ、画面サイズへ適応する相対配置グリッド、中央のぐりぐり操作、左右どちらかの非表示 Pocket 操作からアプリを1回だけ安全に起動できるようにする。

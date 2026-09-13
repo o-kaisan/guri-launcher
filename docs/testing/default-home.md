@@ -33,6 +33,40 @@ Android API の参照:
 
 ## 検証記録
 
+2026-09-13、#35（再開時の確認）。
+- `refactor/35-flutter-migration` 上で前回の移行差分とdebug APKを確認。検証コンテナ `guri-flutter-build-limited` は終了コード0を保持していた。関連実装に変更がないため、成功済みの試験・解析・ビルドは繰り返していない。
+- API 37の専用エミュレーターは前回起動を確認したが、インストール完了とHOME操作の結果は取得できていない。起動途中のインストールは拒否され、起動完了後はストリーミング方式が完了しなかったため通常転送方式を試した。再開時には端末コンテナが停止しており、操作確認は未完了として扱う。API 26の操作確認、署名付きRelease APK、GitHub CIも未確認。
+- 開発ルールの整理は `aebbb83` にコミット済み。移行差分の最終確認では `git diff --check` が成功。未確認項目が残るためIssueはopenを維持する。
+
+2026-09-12、#35（Flutter移行の継続検証）。
+- 環境: Flutter 3.47.4 / Dart 3.13.3、既存Androidイメージに検証用ツールを追加したDocker環境、JDK 25、Android SDK Platform 36、NDK 28.2。
+- `flutter test` は7件成功。Widgetテストで起動時の要求抑止、明示操作、選択後の復帰、外部でHOMEを変更した後の復帰を確認。MethodChannelの未知の応答が失敗状態になることも確認。
+- `flutter analyze`、Dart整形、`make android-emulator-test release-test`、YAML構文確認、`git diff --check` が成功。
+- `flutter build apk --debug` と `cd android && ./gradlew lint --console=plain` が成功。APKは `build/app/outputs/flutter-apk/app-debug.apk` に生成。
+- 初回ビルドはエミュレーターとの同時実行でメモリが逼迫し、SDK導入後に停滞したため停止。エミュレーターを停止して、検証時のみ `GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx2g -Dorg.gradle.workers.max=2"` と `JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2` を設定した再実行で成功した。
+- Flutterが追加したAGP互換フラグを保持。背景は[FlutterのKotlin移行ガイド](https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-app-developers)を参照。
+- レビューでCI・releaseのGradle wrapper検証が削除されていた点を修正し、再レビューで指摘なし。権限追加、秘密情報、外部入力の保存、ログ出力、コードTODOの追加はない。
+- `.codex/DEVELOPMENT.md` の重複手順を整理し、コードはHow、テストはWhat、コミットログはWhy、コードコメントはWhy notという方針を追加。文書レビューと差分確認を実施。
+- 署名付きRelease APKとGitHub CIは、この継続検証では未実施。
+
+2026-09-12、#35（Flutter移行）。
+- UI、画面状態、HOME設定ユースケースをDartへ移し、Android OS APIだけをMethodChannel先の`MainActivity`へ隔離した。
+- `flutter test`（5件）と`flutter analyze`、Android・リリース用script試験が成功した。
+- Android SDKがこの作業環境にないため、APK buildと実機上のHOME選択はCIまたはAndroid SDK導入環境で継続確認する。
+- 権限追加、秘密情報、外部入力の保存、ログ出力、依存サービスの追加はない。コードTODOも追加していない。
+
+2026-09-12、#35（PR #34 の `e2b783f` に対するローカル整理）。
+- アプリ名表示を既存の `app_name` resourceへ統合し、定数用の3クラスと専用テストを削除。HOME処理は変更なし。
+- 既存image `guri-launcher-android-emulator:api37` とGradle cacheを使い、ネットワークなしで `./gradlew --offline test lint assembleDebug --console=plain` が成功。HOME関連の単体試験13件、失敗・エラー0件。
+- `make android-emulator-test release-test` が成功。起動スクリプトの実行権限もGit indexへ記録。
+- 権限・外部入力・ログ・依存関係・ストレージ・署名処理の変更なし。コードTODOの追加なし。
+- この記録時点ではFlutter移行と端末上のHOME選択操作は未実施。下記の未確認項目は継続。
+
+2026-09-10、ブランチ `codex-cloud/20-default-home`。
+- emulator GUI の起動スクリプトに実行権限がなく、Compose container が `Permission denied` で停止する不具合を修正した。
+- Android script の実行権限を自動検査し、同じ退行を検出するようにした。
+- この修正は emulator の起動不能を解消するものであり、HOME 選択の端末上での確認結果ではない。下記の未実施項目は引き続き必要。
+
 2026-09-09、ブランチ `feature/20-default-home`。
 - 環境: 既存 Docker image `guri-launcher-android-emulator:api37`、JDK 25、compileSdk 35、Gradle 9.7.1。
 - コンテナに `make` がないため、同じ Gradle タスクを直接実行する。

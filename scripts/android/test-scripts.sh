@@ -4,6 +4,10 @@ set -euo pipefail
 readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 for script in "$REPOSITORY_ROOT"/.codex/environments/setup.sh "$REPOSITORY_ROOT"/scripts/android/*.sh; do
+  if [[ ! -x "$script" ]]; then
+    printf 'Android script must be executable: %s\n' "$script" >&2
+    exit 1
+  fi
   bash -n "$script"
 done
 
@@ -133,7 +137,7 @@ grep -Fq -- '"127.0.0.1:${ANDROID_EMULATOR_GUI_PORT:-6080}:6080"' \
 grep -Fq -- './scripts/android/start-gui-emulator.sh' "$REPOSITORY_ROOT/compose.yaml"
 grep -Fq -- 'android-gradle-cache:/root/.gradle' "$REPOSITORY_ROOT/compose.yaml"
 grep -Fq -- 'android-build-home:/root/.android-build' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- 'ANDROID_USER_HOME=/root/.android-build ./gradlew assembleDebug' \
+grep -Fq -- 'ANDROID_USER_HOME=/root/.android-build flutter build apk --debug' \
   "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
 grep -Fq -- "service check package" "$REPOSITORY_ROOT/compose.yaml"
 grep -Fq -- "service check activity" "$REPOSITORY_ROOT/compose.yaml"

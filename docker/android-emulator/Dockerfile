@@ -11,14 +11,18 @@ ARG ANDROID_SYSTEM_IMAGE_REVISION=6
 
 ENV ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk \
-    PATH=/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/emulator:$PATH
+    PATH=/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/emulator:$PATH
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-        ca-certificates curl libasound2 libnss3 libpulse0 libx11-xcb1 \
+        ca-certificates curl git libasound2 libnss3 libpulse0 libx11-xcb1 \
         libxcomposite1 libxkbcommon-x11-0 novnc openbox unzip websockify \
         x11vnc xvfb \
     && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /opt/flutter \
+    && flutter config --no-analytics --no-cli-animations \
+    && flutter precache --android
 
 RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
     && curl --fail --location --show-error \
