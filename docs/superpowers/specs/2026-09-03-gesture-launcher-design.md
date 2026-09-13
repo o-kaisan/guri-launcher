@@ -1,5 +1,7 @@
 # Gesture Launcher Design
 
+> 2026-09-12 / #35: 操作仕様・数値・安全条件は引き続き有効です。Flutter移行後の技術方針は[更新済みEpic #16](https://github.com/o-kaisan/guri-launcher/issues/16)と各子Issueを優先します。以下のCompose/ViewModel/DataStore指定は旧実装案であり、採用必須ではありません。現行実装はFlutter版です。
+
 ## Status
 
 - Date: 2026-09-03

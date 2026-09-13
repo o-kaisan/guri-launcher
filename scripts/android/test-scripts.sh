@@ -4,6 +4,10 @@ set -euo pipefail
 readonly REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 for script in "$REPOSITORY_ROOT"/.codex/environments/setup.sh "$REPOSITORY_ROOT"/scripts/android/*.sh; do
+  if [[ ! -x "$script" ]]; then
+    printf 'Android script must be executable: %s\n' "$script" >&2
+    exit 1
+  fi
   bash -n "$script"
 done
 
@@ -101,11 +105,6 @@ invalid_window_output="$(EMULATOR_WINDOW_MODE=visible \
 grep -Fq 'EMULATOR_WINDOW_MODE must be one of: headless, window.' <<<"$invalid_window_output"
 grep -Fq 'status=2' <<<"$invalid_window_output"
 
-invalid_gui_port_output="$(NOVNC_PORT=70000 \
-  "$REPOSITORY_ROOT/scripts/android/start-gui-emulator.sh" 2>&1 || printf 'status=%s\n' "$?")"
-grep -Fq 'NOVNC_PORT must be an integer from 1 through 65535.' <<<"$invalid_gui_port_output"
-grep -Fq 'status=2' <<<"$invalid_gui_port_output"
-
 invalid_skip_build_output="$(SKIP_ANDROID_BUILD=maybe \
   "$REPOSITORY_ROOT/scripts/android/install-and-launch.sh" 2>&1 || printf 'status=%s\n' "$?")"
 grep -Fq "SKIP_ANDROID_BUILD must be 'true' or 'false'." <<<"$invalid_skip_build_output"
@@ -118,26 +117,5 @@ grep -Fq 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' \
   "$REPOSITORY_ROOT/scripts/android/install-and-launch.sh"
 grep -Fq 'consecutive_ready_checks >= 3' \
   "$REPOSITORY_ROOT/scripts/android/install-and-launch.sh"
-
-grep -Fq -- 'run --rm --no-deps -T "$SERVICE"' \
-  "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
-grep -Fq -- 'up --detach --wait --remove-orphans --no-build "$SERVICE"' \
-  "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
-grep -Fq -- 'SKIP_ANDROID_BUILD=true ./scripts/android/install-and-launch.sh' \
-  "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
-grep -Fq -- 'android-emulator-software' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- '/dev/kvm:/dev/kvm' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- 'ANDROID_AVD_NAME: guri_docker_api_37' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- '"127.0.0.1:${ANDROID_EMULATOR_GUI_PORT:-6080}:6080"' \
-  "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- './scripts/android/start-gui-emulator.sh' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- 'android-gradle-cache:/root/.gradle' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- 'android-build-home:/root/.android-build' "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- 'ANDROID_USER_HOME=/root/.android-build ./gradlew assembleDebug' \
-  "$REPOSITORY_ROOT/scripts/android/run-in-container.sh"
-grep -Fq -- "service check package" "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- "service check activity" "$REPOSITORY_ROOT/compose.yaml"
-grep -Fq -- 'websockify --web=/usr/share/novnc' \
-  "$REPOSITORY_ROOT/scripts/android/start-gui-emulator.sh"
 
 printf 'Android emulator script checks passed.\n'

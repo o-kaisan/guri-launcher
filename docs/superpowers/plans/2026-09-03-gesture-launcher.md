@@ -1,5 +1,7 @@
 # Gesture Launcher MVP Implementation Plan
 
+> 2026-09-12 / #35: この文書のKotlin/Compose固有箇所は旧実装計画です。Flutter実装では技術詳細を読み替えてください。今後の技術方針・受入条件は[更新済みEpic #16](https://github.com/o-kaisan/guri-launcher/issues/16)と各子Issueを優先し、クラス・依存・テストの詳細は着手時に必要な範囲で再計画します。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** guri-launcher を Android の HOME アプリとして動作させ、画面サイズへ適応する相対配置グリッド、中央のぐりぐり操作、左右どちらかの非表示 Pocket 操作からアプリを1回だけ安全に起動できるようにする。
@@ -94,7 +96,7 @@ Wave 内の項目は独立しているため並行実装できる。次の Wave 
 
 **Produces:** `HomeRoleRequester.request(activity): HomeRoleRequestResult`; no Domain dependency.
 
-- [ ] **Step 1: Write the API-level decision test.**
+- [x] **Step 1: Write the API-level decision test.**
 
 ```kotlin
 @Test fun `API 29 uses role manager`() {
@@ -106,11 +108,11 @@ Wave 内の項目は独立しているため並行実装できる。次の Wave 
 }
 ```
 
-- [ ] **Step 2: Run the focused test and confirm it fails because the decision API does not exist.**
+- [x] **Step 2: Run the focused test and confirm it fails because the decision API does not exist.**
 
 Run: `./gradlew :app:testDebugUnitTest --tests '*HomeRoleDecisionTest'`
 
-- [ ] **Step 3: Add separate LAUNCHER and HOME intent filters.**
+- [x] **Step 3: Add separate LAUNCHER and HOME intent filters.**
 
 ```xml
 <intent-filter>
@@ -124,13 +126,13 @@ Run: `./gradlew :app:testDebugUnitTest --tests '*HomeRoleDecisionTest'`
 </intent-filter>
 ```
 
-- [ ] **Step 4: Implement `HomeRoleRoute`, the pure decision function, and `HomeRoleRequester`.** Return `AlreadyHome`, `RequestStarted`, or `SettingsOpened`; never swallow `ActivityNotFoundException`.
-- [ ] **Step 5: Add a settings action in `MainActivity` that calls the requester only after explicit user input.** Do not prompt every time HOME opens.
-- [ ] **Step 6: Run focused and full unit tests, then lint and assemble.**
+- [x] **Step 4: Implement `HomeRoleRoute`, the pure decision function, and `HomeRoleRequester`.** Return `AlreadyHome`, `RequestStarted`, or `SettingsOpened`; never swallow `ActivityNotFoundException`.
+- [x] **Step 5: Add a settings action in `MainActivity` that calls the requester only after explicit user input.** Do not prompt every time HOME opens.
+- [x] **Step 6: Run focused and full unit tests, then lint and assemble.**
 
 Run: `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add app/src/main/AndroidManifest.xml app/src/main/java app/src/test/java

@@ -35,13 +35,22 @@ jobs:
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
 
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
       - name: Test release scripts
         run: make release-test
 
       - name: Run unit tests
         run: make test
 
-      - name: Run Android lint
+      - name: Run Dart analysis
         run: make lint
 
       - name: Verify signed release build
@@ -66,11 +75,9 @@ jobs:
             -storepass "$ci_password" \
             -keypass "$ci_password" >/dev/null
 
-          ./gradlew assembleRelease \
-            -PguriVersionName=0.1.0 \
-            -PguriVersionCode=1000
+          flutter build apk --release --build-name=0.1.0 --build-number=1000
 
-          release_apk="app/build/outputs/apk/release/app-release.apk"
+          release_apk="build/app/outputs/flutter-apk/app-release.apk"
           test "$(apkanalyzer manifest version-name "$release_apk")" = "0.1.0"
           test "$(apkanalyzer manifest version-code "$release_apk")" = "1000"
           apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner \
