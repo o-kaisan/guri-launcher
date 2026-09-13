@@ -4,9 +4,8 @@ import '../application/home_role_service.dart';
 import '../domain/home_role_status.dart';
 
 class AndroidHomeRoleGateway implements HomeRoleGateway {
-  const AndroidHomeRoleGateway({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel('guri_launcher/home_role');
-  final MethodChannel _channel;
+  const AndroidHomeRoleGateway();
+  static const _channel = MethodChannel('guri_launcher/home_role');
 
   @override
   Future<bool> isCurrentHome() async =>

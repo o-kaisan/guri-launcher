@@ -33,6 +33,15 @@ Android API の参照:
 
 ## 検証記録
 
+2026-09-13、#35（PR #34 の不要実装レビュー）。
+- Dart全実装、Kotlin、Manifest・リソース、Gradle、CI・release・Docker設定と参照を確認。旧Compose画面・定数用domain/use caseは削除済み。残る`MainActivity.kt`はHOME判定とOS UIを開くネイティブ境界であり、API 26〜28の分岐も必要なため維持した。
+- minSdk 26では旧API向けの白背景は使われないため削除し、実際に使う`drawable-v21/launch_background.xml`の内容を`drawable/launch_background.xml`に統合。使用箇所のないMethodChannel差し替え引数を削除し、既定チャンネルと既存モックを維持した。画面の状態→bool→状態の再変換と、既存規則に含まれるignoreの重複も整理した。
+- Kotlinプラグインの`apply false`宣言は未使用ではない。Flutter 3.47.4の`FlutterPluginUtils.detectApplyingKotlinGradlePlugin`が`android.builtInKotlin=false`時に適用するため維持した。互換フラグや署名・リリース保護は変更しない。
+- 既存Flutterテスト7件、`flutter analyze`、Dart整形チェック、`git diff --check`が成功。ignore整理後もGradle/buildキャッシュ・local.properties・署名鍵が除外されることを確認。独立した読み取り専用レビューでも削除差分への指摘なし。
+- Windows / Flutter 3.47.4で`flutter build apk --debug`が成功。リソース統合後も`android/gradlew.bat lint assembleDebug --console=plain`が成功。Lintはエラー0件、既存Manifestの`DataExtractionRules`・`MissingApplicationIcon`の警告2件。初回Lintが検出したGit管理外`local.properties`のドライブ文字エスケープを修正し、リソース移動後の増分マージ不整合は`:app:mergeDebugResources --rerun-tasks`で再生成した。ログは`build/pr34-android-lint.log`。
+- 権限、依存、外部入力、ログ、保存処理の追加なし。秘密情報と残存コードTODOなし。OS UIの端末操作と署名付きReleaseは今回未実施。Android・release用スクリプトに変更はなく、その試験は再実行していない。
+- 空の`drawable-v21`フォルダー除去後の最終Lintログは`build/pr34-android-lint-final.log`。上記2件以外のLint警告はない。
+
 2026-09-13、#35（再開時の確認）。
 - `refactor/35-flutter-migration` 上で前回の移行差分とdebug APKを確認。検証コンテナ `guri-flutter-build-limited` は終了コード0を保持していた。関連実装に変更がないため、成功済みの試験・解析・ビルドは繰り返していない。
 - API 37の専用エミュレーターは前回起動を確認したが、インストール完了とHOME操作の結果は取得できていない。起動途中のインストールは拒否され、起動完了後はストリーミング方式が完了しなかったため通常転送方式を試した。再開時には端末コンテナが停止しており、操作確認は未完了として扱う。API 26の操作確認、署名付きRelease APK、GitHub CIも未確認。

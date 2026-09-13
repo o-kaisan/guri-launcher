@@ -39,12 +39,7 @@ google-services.json
 .flutter-plugins-dependencies
 .packages
 android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
-build/
 coverage/
 
 # Android local state
-android/.gradle/
-android/local.properties
 android/**/key.properties
-*.jks
-*.keystore

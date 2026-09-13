@@ -33,15 +33,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _refresh({bool afterResume = false}) async {
-    final isCurrentHome =
-        await widget.service.currentStatus() == HomeRoleStatus.alreadyHome;
+    final currentStatus = await widget.service.currentStatus();
     if (!mounted) return;
     setState(() {
       _status = afterResume
-          ? statusAfterResume(previous: _status, isCurrentHome: isCurrentHome)
-          : (isCurrentHome
-                ? HomeRoleStatus.alreadyHome
-                : HomeRoleStatus.notHome);
+          ? statusAfterResume(
+              previous: _status,
+              isCurrentHome: currentStatus == HomeRoleStatus.alreadyHome,
+            )
+          : currentStatus;
     });
   }
 
